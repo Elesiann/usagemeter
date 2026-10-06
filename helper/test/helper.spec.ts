@@ -6,7 +6,7 @@ import { test } from "node:test";
 
 import { createServer } from "node:http";
 
-import { antigravityWindows, availableCredits, claudeWindows, codexWindows, readLimits } from "../src/limits.ts";
+import { antigravitySummaryWindows, antigravityWindows, availableCredits, claudeWindows, codexWindows, readLimits } from "../src/limits.ts";
 import { scan, shiftDay } from "../src/scan.ts";
 import { transcriptSources } from "../src/sources.ts";
 import { createOverrideRateTable } from "../src/t3/usage/usagePricing.ts";
@@ -133,6 +133,9 @@ test("hub limits follow CLIProxyAPI's management contract", async () => {
         if (upstream.endsWith("/api/oauth/usage")) return send({ status_code: 500, body: "do-not-publish" });
         // The daily host fails, so the production host must be tried next.
         if (upstream.startsWith("https://daily-cloudcode-pa")) return send({ status_code: 503, body: "" });
+        if (upstream === "https://cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary") {
+          return send({ status_code: 200, body: JSON.stringify({ groups: [{ buckets: [{ bucketId: "gemini-5h", remainingFraction: 0.25, resetTime: "2026-10-06T03:00:00Z" }, { bucketId: "gemini-weekly", remainingFraction: 0.9 }] }] }) });
+        }
         if (upstream === "https://cloudcode-pa.googleapis.com/v1internal:fetchAvailableModels") {
           return send({ status_code: 200, body: JSON.stringify({ models: { "gemini-3-pro": { displayName: "Gemini 3 Pro", quotaInfo: { remainingFraction: 0.25, resetTime: "2026-10-06T03:00:00Z" } } } }) });
         }
@@ -158,10 +161,10 @@ test("hub limits follow CLIProxyAPI's management contract", async () => {
     assert.match(claude.error ?? "", /HTTP 500/);
     assert.ok(!JSON.stringify(out).includes("do-not-publish"));
     const ag = out.accounts.find((a) => a.provider === "antigravity")!;
-    assert.deepEqual(ag.windows.map((w) => [w.label, w.usedPercent]), [["Gemini", 75]]);
+    assert.deepEqual(ag.windows.map((w) => [w.label, w.kind, Math.round(w.usedPercent)]), [["Session · Gemini", "session", 75], ["Weekly · Gemini", "weekly", 10]]);
     const agCall = seen.find((r) => String(r.body?.url).startsWith("https://cloudcode-pa"))!;
     assert.equal(agCall.body.method, "POST");
-    assert.deepEqual(JSON.parse(agCall.body.data), { project: "proj-9" });
+    assert.deepEqual(JSON.parse(agCall.body.data), {});
     assert.equal(agCall.body.header["User-Agent"], "antigravity");
     assert.equal(out.accounts.length, 3);
   } finally {
@@ -184,5 +187,18 @@ test("Antigravity models collapse into families, worst member and earliest reset
   assert.deepEqual(
     windows.map((w) => [w.label, w.usedPercent, w.resetsAt ?? null]),
     [["Claude + GPT", 100, null], ["Gemini", 60, "2026-10-06T04:00:00.000Z"]],
+  );
+});
+
+test("Antigravity summary buckets become session and weekly windows per family", () => {
+  const windows = antigravitySummaryWindows({
+    groups: [
+      { buckets: [{ bucketId: "3p-weekly", remainingFraction: 0.5, resetTime: "2026-10-11T00:00:00Z" }, { bucketId: "gemini-3.8-pro", remainingFraction: 0 }] },
+      { buckets: [{ bucketId: "gemini-5h", remainingFraction: 1 }, { bucketId: "3p-5h", remainingFraction: 0 }] },
+    ],
+  });
+  assert.deepEqual(
+    windows.map((w) => [w.label, w.usedPercent, w.windowMins]),
+    [["Session · Gemini", 0, 300], ["Session · Claude + GPT", 100, 300], ["Weekly · Claude + GPT", 50, 10080]],
   );
 });

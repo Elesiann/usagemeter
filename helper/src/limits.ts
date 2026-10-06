@@ -111,6 +111,38 @@ export function availableCredits(response: unknown, nowMs: number): number {
   ).length;
 }
 
+const ANTIGRAVITY_BUCKETS: Readonly<Record<string, { label: string; kind: WindowKind; windowMins: number }>> = {
+  "gemini-5h": { label: "Session · Gemini", kind: "session", windowMins: SESSION_MINS },
+  "gemini-weekly": { label: "Weekly · Gemini", kind: "weekly", windowMins: WEEK_MINS },
+  "3p-5h": { label: "Session · Claude + GPT", kind: "session", windowMins: SESSION_MINS },
+  "3p-weekly": { label: "Weekly · Claude + GPT", kind: "weekly", windowMins: WEEK_MINS },
+};
+
+/**
+ * Antigravity `retrieveUserQuotaSummary` → the 5-hour and weekly windows of
+ * each model family, from `groups[].buckets[]` with a known `bucketId`.
+ */
+export function antigravitySummaryWindows(response: unknown): LimitWindow[] {
+  if (!isRecord(response) || !Array.isArray(response.groups)) return [];
+  const found = new Map<string, LimitWindow>();
+  for (const group of response.groups) {
+    if (!isRecord(group) || !Array.isArray(group.buckets)) continue;
+    for (const bucket of group.buckets) {
+      if (!isRecord(bucket) || typeof bucket.bucketId !== "string" || typeof bucket.remainingFraction !== "number") continue;
+      const known = ANTIGRAVITY_BUCKETS[bucket.bucketId];
+      if (!known) continue;
+      const resetsAt = isoFromString(bucket.resetTime);
+      found.set(bucket.bucketId, {
+        id: bucket.bucketId,
+        ...known,
+        usedPercent: clamp((1 - Math.min(1, Math.max(0, bucket.remainingFraction))) * 100),
+        ...(resetsAt ? { resetsAt } : {}),
+      });
+    }
+  }
+  return Object.keys(ANTIGRAVITY_BUCKETS).flatMap((id) => (found.has(id) ? [found.get(id)!] : []));
+}
+
 /** Internal or feature-specific Antigravity model ids that carry no user-facing quota. */
 const excludedAntigravityModel = (id: string): boolean =>
   /^(chat_|tab_|rev_)/.test(id) || id.includes("image") || id.includes("mquery") || id.includes("lite");
@@ -219,12 +251,24 @@ async function apiCall(hub: HubConfig, account: AuthFile, url: string, data?: un
 const planLabel = (plan: unknown): string | undefined =>
   typeof plan === "string" && plan ? plan.charAt(0).toUpperCase() + plan.slice(1) : undefined;
 
-async function readAntigravity(hub: HubConfig, account: AuthFile): Promise<unknown> {
-  const body = account.project_id ? { project: account.project_id } : {};
+/**
+ * The 5-hour and weekly windows from `retrieveUserQuotaSummary`, or, when no
+ * host answers it, one window per model family from `fetchAvailableModels`.
+ */
+async function readAntigravity(hub: HubConfig, account: AuthFile): Promise<LimitWindow[]> {
   let lastError: unknown;
   for (const host of ANTIGRAVITY_HOSTS) {
     try {
-      return await apiCall(hub, account, `${host}/v1internal:fetchAvailableModels`, body);
+      const windows = antigravitySummaryWindows(await apiCall(hub, account, `${host}/v1internal:retrieveUserQuotaSummary`, {}));
+      if (windows.length > 0) return windows;
+    } catch (error) {
+      lastError = error;
+    }
+  }
+  const body = account.project_id ? { project: account.project_id } : {};
+  for (const host of ANTIGRAVITY_HOSTS) {
+    try {
+      return antigravityWindows(await apiCall(hub, account, `${host}/v1internal:fetchAvailableModels`, body));
     } catch (error) {
       lastError = error;
     }
@@ -237,7 +281,7 @@ async function readHubAccount(hub: HubConfig, account: AuthFile, nowMs: number):
   const label = account.email || ({ codex: "Codex account", claude: "Claude account", antigravity: "Antigravity account" } as const)[provider];
   try {
     if (provider === "antigravity") {
-      return { provider, label, windows: antigravityWindows(await readAntigravity(hub, account)) };
+      return { provider, label, windows: await readAntigravity(hub, account) };
     }
     if (provider === "claude") {
       const usage = await apiCall(hub, account, "https://api.anthropic.com/api/oauth/usage");

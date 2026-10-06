@@ -69,6 +69,36 @@ function availableCredits(response, nowMs) {
     return 0;
   return response.credits.filter((credit) => isRecord(credit) && credit.reset_type === "codex_rate_limits" && credit.status === "available" && typeof credit.expires_at === "string" && Date.parse(credit.expires_at) > nowMs).length;
 }
+var ANTIGRAVITY_BUCKETS = {
+  "gemini-5h": { label: "Session · Gemini", kind: "session", windowMins: SESSION_MINS },
+  "gemini-weekly": { label: "Weekly · Gemini", kind: "weekly", windowMins: WEEK_MINS },
+  "3p-5h": { label: "Session · Claude + GPT", kind: "session", windowMins: SESSION_MINS },
+  "3p-weekly": { label: "Weekly · Claude + GPT", kind: "weekly", windowMins: WEEK_MINS }
+};
+function antigravitySummaryWindows(response) {
+  if (!isRecord(response) || !Array.isArray(response.groups))
+    return [];
+  let found = /* @__PURE__ */ new Map;
+  for (let group of response.groups) {
+    if (!isRecord(group) || !Array.isArray(group.buckets))
+      continue;
+    for (let bucket of group.buckets) {
+      if (!isRecord(bucket) || typeof bucket.bucketId !== "string" || typeof bucket.remainingFraction !== "number")
+        continue;
+      let known = ANTIGRAVITY_BUCKETS[bucket.bucketId];
+      if (!known)
+        continue;
+      let resetsAt = isoFromString(bucket.resetTime);
+      found.set(bucket.bucketId, {
+        id: bucket.bucketId,
+        ...known,
+        usedPercent: clamp((1 - Math.min(1, Math.max(0, bucket.remainingFraction))) * 100),
+        ...resetsAt ? { resetsAt } : {}
+      });
+    }
+  }
+  return Object.keys(ANTIGRAVITY_BUCKETS).flatMap((id) => found.has(id) ? [found.get(id)] : []);
+}
 var excludedAntigravityModel = (id) => /^(chat_|tab_|rev_)/.test(id) || id.includes("image") || id.includes("mquery") || id.includes("lite");
 function antigravityWindows(response) {
   if (!isRecord(response) || !isRecord(response.models))
@@ -140,10 +170,19 @@ async function apiCall(hub, account, url, data) {
 }
 var planLabel = (plan) => typeof plan === "string" && plan ? plan.charAt(0).toUpperCase() + plan.slice(1) : void 0;
 async function readAntigravity(hub, account) {
-  let body = account.project_id ? { project: account.project_id } : {}, lastError;
+  let lastError;
   for (let host of ANTIGRAVITY_HOSTS)
     try {
-      return await apiCall(hub, account, `${host}/v1internal:fetchAvailableModels`, body);
+      let windows = antigravitySummaryWindows(await apiCall(hub, account, `${host}/v1internal:retrieveUserQuotaSummary`, {}));
+      if (windows.length > 0)
+        return windows;
+    } catch (error) {
+      lastError = error;
+    }
+  let body = account.project_id ? { project: account.project_id } : {};
+  for (let host of ANTIGRAVITY_HOSTS)
+    try {
+      return antigravityWindows(await apiCall(hub, account, `${host}/v1internal:fetchAvailableModels`, body));
     } catch (error) {
       lastError = error;
     }
@@ -153,7 +192,7 @@ async function readHubAccount(hub, account, nowMs) {
   let provider = account.provider === "codex" ? "codex" : account.provider === "antigravity" ? "antigravity" : "claude", label = account.email || { codex: "Codex account", claude: "Claude account", antigravity: "Antigravity account" }[provider];
   try {
     if (provider === "antigravity")
-      return { provider, label, windows: antigravityWindows(await readAntigravity(hub, account)) };
+      return { provider, label, windows: await readAntigravity(hub, account) };
     if (provider === "claude") {
       let usage = await apiCall(hub, account, "https://api.anthropic.com/api/oauth/usage");
       return { provider, label, windows: claudeWindows(usage) };
