@@ -69,7 +69,8 @@ function footer(el, s) {
 }
 
 /** The headline and per-provider list on the left (or top) of the Cost and Tokens tabs. */
-function summary(el, s, range, metric) {
+/** The headline and one entry per provider, each value right-aligned to `width`. */
+function summary(el, s, range, metric, width) {
   const total = range.total
   const head = metric === 'cost' ? money(total.costUsd) : tokens(total.tokens)
   const children = [
@@ -81,14 +82,19 @@ function summary(el, s, range, metric) {
   for (const p of range.providers) {
     const value = metric === 'cost' ? money(p.costUsd) : tokens(p.tokens)
     const other = metric === 'cost' ? tokens(p.tokens) + ' tokens' : money(p.costUsd)
+    const name = providerLabel(p.provider) + ' '
+    const sessions = p.sessions + ' sessions'
+    const gap = Math.max(2, width - 2 - name.length - sessions.length - value.length)
     children.push(row(el, [
       text(el, '● ', { color: providerColor(p.provider) }),
-      text(el, providerLabel(p.provider) + ' '),
-      text(el, p.sessions + ' sessions', { dimColor: true }),
-      text(el, '  ' + value, { bold: true }),
+      text(el, name),
+      text(el, sessions, { dimColor: true }),
+      text(el, ' '.repeat(gap) + value, { bold: true }),
     ]))
-    children.push(text(el, '  ' + percent(metric === 'cost' ? p.costUsd : p.tokens, whole) + ' of ' + metric + ' · ' + other, { dimColor: true }))
+    children.push(text(el, percent(metric === 'cost' ? p.costUsd : p.tokens, whole) + ' of ' + metric + ' · ' + other, { dimColor: true }))
+    children.push(blank(el))
   }
+  children.pop()
   return col(el, children)
 }
 
@@ -208,8 +214,8 @@ function usageTab(el, s, width) {
   const wide = width >= WIDE
   const chartW = wide ? width - SIDE - 3 : width
   const top = wide
-    ? row(el, [col(el, [summary(el, s, range, metric)], { width: SIDE }), chart(el, s, range, metric, chartW)], { columnGap: 3 })
-    : col(el, [summary(el, s, range, metric), blank(el), chart(el, s, range, metric, chartW)])
+    ? row(el, [col(el, [summary(el, s, range, metric, SIDE)], { width: SIDE }), chart(el, s, range, metric, chartW)], { columnGap: 3 })
+    : col(el, [summary(el, s, range, metric, Math.min(width, SIDE)), blank(el), chart(el, s, range, metric, chartW)])
   return col(el, [
     top,
     blank(el),
