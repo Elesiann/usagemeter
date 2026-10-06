@@ -108,10 +108,14 @@ async function refreshLimits($) {
   }
 }
 
+/**
+ * Usage is rescanned once its snapshot is stale. Limits are read on every
+ * open: the read is quick, and a saved snapshot may predate a change to the
+ * hub settings.
+ */
 function refresh($, force) {
-  const now = Date.now()
-  if (force || !usage || now - Date.parse(usage.readAt) > STALE_MS) refreshUsage($)
-  if (force || !limits || now - Date.parse(limits.checkedAt) > STALE_MS) refreshLimits($)
+  if (force || !usage || Date.now() - Date.parse(usage.readAt) > STALE_MS) refreshUsage($)
+  refreshLimits($)
 }
 
 function pointCount() {
