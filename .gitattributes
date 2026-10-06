@@ -1,0 +1,4 @@
+# The bundled helper is generated from helper/src.
+helper/dist/** linguist-generated=true
+# Parsing and pricing vendored from T3 Code.
+helper/src/t3/** linguist-vendored=true

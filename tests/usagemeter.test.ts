@@ -59,15 +59,15 @@ const LIMITS = {
 }
 
 const PANE = {
-  plugin: 'ledger',
+  plugin: 'usagemeter',
   component: 'Pane',
-  requestId: 'ledger',
+  requestId: 'usagemeter',
   surface: 'terminal',
   viewport: { columns: 160, rows: 50 },
-  props: { title: 'Ledger', isFocused: true, bodyColumns: 120, placement: 'dock', scroll: { offset: 0, bodyRows: 40 }, view: {} },
+  props: { title: 'Usage meter', isFocused: true, bodyColumns: 120, placement: 'dock', scroll: { offset: 0, bodyRows: 40 }, view: {} },
 } as const
 
-/** Stubs the engine for one /ledger session and records every helper run. */
+/** Stubs the engine for one /usagemeter session and records every helper run. */
 function stubs(on: any, runs: { argv: string[]; env?: Record<string, string> }[]) {
   on('store.get', () => ({ value: undefined }))
   on('store.set', () => ({ value: undefined }))
@@ -84,17 +84,17 @@ function stubs(on: any, runs: { argv: string[]; env?: Record<string, string> }[]
 
 const settle = () => new Promise((resolve) => setTimeout(resolve, 20))
 
-test('/ledger scans, reads limits with the key in the environment, and draws the cost tab', { options: { hubUrl: 'http://localhost:8317', hubKey: 'secret-key', openCodeGo: true } }, async ($, on) => {
+test('/usagemeter scans, reads limits with the key in the environment, and draws the cost tab', { options: { hubUrl: 'http://localhost:8317', hubKey: 'secret-key', openCodeGo: true } }, async ($, on) => {
   const runs: { argv: string[]; env?: Record<string, string> }[] = []
   stubs(on, runs)
   await $.session.start({ surface: 'terminal', isInteractive: true, cwd: '/work' })
-  await $.command.run({ command: 'ledger', args: '' })
+  await $.command.run({ command: 'usagemeter', args: '' })
   await settle()
 
   expect(runs.map((r) => r.argv.at(-1)).sort()).toEqual(['limits', 'scan'])
   const limitsRun = runs.find((r) => r.argv.at(-1) === 'limits')!
   expect(limitsRun.argv.join(' ')).not.toContain('secret-key')
-  expect(limitsRun.env).toMatchObject({ LEDGER_HUB_URL: 'http://localhost:8317', LEDGER_HUB_KEY: 'secret-key', LEDGER_OPENCODE_GO: '1' })
+  expect(limitsRun.env).toMatchObject({ USAGEMETER_HUB_URL: 'http://localhost:8317', USAGEMETER_HUB_KEY: 'secret-key', USAGEMETER_OPENCODE_GO: '1' })
 
   const ui = await $.ui.mount(PANE)
   expect(await ui.find({ type: 'Text', text: '$42.50' })).toBeDefined()
@@ -104,7 +104,7 @@ test('/ledger scans, reads limits with the key in the environment, and draws the
 test('keys switch tab, range and grouping', async ($, on) => {
   stubs(on, [])
   await $.session.start({ surface: 'terminal', isInteractive: true, cwd: '/work' })
-  await $.command.run({ command: 'ledger', args: '' })
+  await $.command.run({ command: 'usagemeter', args: '' })
   await settle()
   const ui = await $.ui.mount(PANE)
 
@@ -125,7 +125,7 @@ test('keys switch tab, range and grouping', async ($, on) => {
 test('a narrow pane stacks its layout and draws on both surfaces', async ($, on) => {
   stubs(on, [])
   await $.session.start({ surface: 'terminal', isInteractive: true, cwd: '/work' })
-  await $.command.run({ command: 'ledger', args: '' })
+  await $.command.run({ command: 'usagemeter', args: '' })
   await settle()
   for (const surface of ['terminal', 'desktop'] as const) {
     const ui = await $.ui.mount({ ...PANE, surface, props: { ...PANE.props, bodyColumns: 60, placement: 'inline' } })
@@ -148,7 +148,7 @@ test('a failed scan is reported in the pane', async ($, on) => {
   on('session.usage', () => ({ value: { startedAt: 0, context: { window: 200000 }, rateLimits: [], cost: { usd: 0 } } }))
   on('process.run', () => ({ value: { exitCode: 1, stdout: JSON.stringify({ version: 1, error: 'disk on fire' }) + '\n', stderr: '' } }))
   await $.session.start({ surface: 'terminal', isInteractive: true, cwd: '/work' })
-  await $.command.run({ command: 'ledger', args: '' })
+  await $.command.run({ command: 'usagemeter', args: '' })
   await settle()
   const ui = await $.ui.mount(PANE)
   expect(await ui.find({ type: 'Text', text: 'Could not read usage: disk on fire' })).toBeDefined()

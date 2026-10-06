@@ -1,13 +1,13 @@
-// ledger: a /ledger pane with cost, tokens and plan limits.
+// usagemeter: a /usagemeter pane with cost, tokens and plan limits.
 //
 // The heavy lifting (reading gigabytes of local transcripts, pricing them,
-// asking the CLIProxyAPI hub for limits) happens in helper/dist/ledger-helper.mjs,
+// asking the CLIProxyAPI hub for limits) happens in helper/dist/usagemeter-helper.mjs,
 // which this module runs with $.process.run. This file keeps the pane's state
 // and draws it through view.js.
 import { GROUPS, RANGES } from './format.js'
 import { nextOf, renderPane } from './view.js'
 
-const PANE = 'ledger'
+const PANE = 'usagemeter'
 /** A snapshot older than this is refreshed when the pane opens. */
 const STALE_MS = 5 * 60 * 1000
 /** A cold 90-day scan reads every transcript once; later scans reuse the helper's cache. */
@@ -55,7 +55,7 @@ function parseOutput(stdout) {
   }
 }
 
-const NODE_HINT = 'ledger needs Node.js 22.5 or later on PATH'
+const NODE_HINT = 'usagemeter needs Node.js 22.5 or later on PATH'
 
 const failure = (result, doc) => {
   if (doc?.error) return doc.error
@@ -81,7 +81,7 @@ async function refreshUsage($, force) {
   usageError = null
   $.ui.invalidate('ui.render')
   try {
-    const result = await $.process.run(['node', '--no-warnings', $.plugin.root + '/helper/dist/ledger-helper.mjs', 'scan'], {
+    const result = await $.process.run(['node', '--no-warnings', $.plugin.root + '/helper/dist/usagemeter-helper.mjs', 'scan'], {
       timeoutMs: SCAN_TIMEOUT_MS,
     })
     const doc = parseOutput(result.stdout)
@@ -109,12 +109,12 @@ async function refreshLimits($) {
     const native = await $.session.usage()
     if (native.rateLimits.length > 0) claudeNative = nativeWindows(native.rateLimits)
     // The key travels in the child's environment, never on its command line.
-    const result = await $.process.run(['node', '--no-warnings', $.plugin.root + '/helper/dist/ledger-helper.mjs', 'limits'], {
+    const result = await $.process.run(['node', '--no-warnings', $.plugin.root + '/helper/dist/usagemeter-helper.mjs', 'limits'], {
       timeoutMs: LIMITS_TIMEOUT_MS,
       env: {
-        LEDGER_HUB_URL: String(config.hubUrl ?? ''),
-        LEDGER_HUB_KEY: String(config.hubKey ?? ''),
-        LEDGER_OPENCODE_GO: config.openCodeGo ? '1' : '0',
+        USAGEMETER_HUB_URL: String(config.hubUrl ?? ''),
+        USAGEMETER_HUB_KEY: String(config.hubKey ?? ''),
+        USAGEMETER_OPENCODE_GO: config.openCodeGo ? '1' : '0',
       },
     })
     const doc = parseOutput(result.stdout)
@@ -151,7 +151,7 @@ export function register(on, options) {
       // No saved snapshot: the first open scans.
     }
     await $.command.register({
-      name: 'ledger',
+      name: 'usagemeter',
       description: 'Cost, tokens and plan limits across your coding agents',
       argumentHint: '[refresh]',
       immediate: true,
@@ -167,8 +167,8 @@ export function register(on, options) {
     return next(e)
   })
 
-  on('command.run', { command: 'ledger' }, async ($, e) => {
-    await $.ui.open({ id: PANE, title: 'Ledger', focus: true, closeOnEscape: true, columns: 150 })
+  on('command.run', { command: 'usagemeter' }, async ($, e) => {
+    await $.ui.open({ id: PANE, title: 'Usage meter', focus: true, closeOnEscape: true, columns: 150 })
     refresh($, e.args.trim() === 'refresh')
     return {}
   })

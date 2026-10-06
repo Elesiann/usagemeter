@@ -1,9 +1,19 @@
 {
-  "name": "ledger",
+  "name": "usagemeter",
+  "version": "0.2.0",
   "private": true,
+  "description": "Cost, tokens and plan limits across your coding agents, in a Claude Code pane",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Elesiann/usagemeter.git"
+  },
   "type": "module",
+  "engines": {
+    "node": ">=22.5"
+  },
   "scripts": {
-    "build": "bun build helper/src/main.ts --target node --format esm --minify-syntax --outfile helper/dist/ledger-helper.mjs",
+    "build": "bun build helper/src/main.ts --target node --format esm --minify-syntax --banner '// usagemeter-helper (MIT). Bundles T3 Code (MIT), stream-json and stream-chain (BSD-3-Clause): see THIRD_PARTY_NOTICES.md.' --outfile helper/dist/usagemeter-helper.mjs",
     "typecheck": "tsc -p helper/tsconfig.json",
     "test:helper": "node --no-warnings --test helper/test/*.spec.ts",
     "test": "npm run -s test:helper"

@@ -13,12 +13,12 @@ export interface TranscriptSource {
 }
 
 /**
- * The home directory whose agent history is read: `LEDGER_HOME` when set, for
+ * The home directory whose agent history is read: `USAGEMETER_HOME` when set, for
  * example a Windows profile seen from WSL, else the user's home. Explicit
  * per-tool variables such as `CLAUDE_CONFIG_DIR` still take precedence.
  */
 export const historyHome = (env: NodeJS.ProcessEnv): string =>
-  env.LEDGER_HOME?.trim() || env.HOME?.trim() || os.homedir();
+  env.USAGEMETER_HOME?.trim() || env.HOME?.trim() || os.homedir();
 
 const canonical = (dir: string): string => {
   try {

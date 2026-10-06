@@ -1,10 +1,21 @@
 {
-  "name": "ledger",
-  "version": "0.1.6",
-  "description": "A /ledger pane with cost, tokens and plan limits across Claude Code, Codex, OpenCode and Antigravity, read from local history and a CLIProxyAPI hub.",
-  "author": { "name": "Elesiann" },
+  "name": "usagemeter",
+  "version": "0.2.0",
+  "description": "A /usagemeter pane with cost, tokens and plan limits across Claude Code, Codex, OpenCode and Antigravity, read from local history and a CLIProxyAPI hub.",
+  "author": {
+    "name": "Elesiann"
+  },
+  "homepage": "https://github.com/Elesiann/usagemeter",
+  "repository": "https://github.com/Elesiann/usagemeter",
   "license": "MIT",
-  "keywords": ["claude-code", "mods", "usage", "cost", "limits", "cliproxyapi"],
+  "keywords": [
+    "claude-code",
+    "mods",
+    "usage",
+    "cost",
+    "limits",
+    "cliproxyapi"
+  ],
   "userConfig": {
     "hubUrl": {
       "type": "string",

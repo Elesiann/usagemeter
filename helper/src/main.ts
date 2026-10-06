@@ -1,9 +1,9 @@
-// ledger-helper: the out-of-process half of the ledger mod. The mod runs it
+// usagemeter-helper: the out-of-process half of the usagemeter mod. The mod runs it
 // through $.process.run and reads one JSON document from stdout.
 //
-//   ledger-helper scan [--tz <zone>] [--refresh-rates]
-//   ledger-helper limits      (hub URL and key from LEDGER_HUB_URL / LEDGER_HUB_KEY,
-//                              OpenCode Go when LEDGER_OPENCODE_GO=1)
+//   usagemeter-helper scan [--tz <zone>] [--refresh-rates]
+//   usagemeter-helper limits      (hub URL and key from USAGEMETER_HUB_URL / USAGEMETER_HUB_KEY,
+//                              OpenCode Go when USAGEMETER_OPENCODE_GO=1)
 import * as os from "node:os";
 import * as path from "node:path";
 
@@ -14,9 +14,9 @@ import { scan } from "./scan.ts";
 export const OUTPUT_VERSION = 1;
 
 function cacheDir(env: NodeJS.ProcessEnv): string {
-  if (env.LEDGER_CACHE_DIR?.trim()) return env.LEDGER_CACHE_DIR.trim();
+  if (env.USAGEMETER_CACHE_DIR?.trim()) return env.USAGEMETER_CACHE_DIR.trim();
   const xdg = env.XDG_CACHE_HOME?.trim();
-  return path.join(xdg && path.isAbsolute(xdg) ? xdg : path.join(os.homedir(), ".cache"), "ledger");
+  return path.join(xdg && path.isAbsolute(xdg) ? xdg : path.join(os.homedir(), ".cache"), "usagemeter");
 }
 
 function flag(args: readonly string[], name: string): string | undefined {
@@ -46,9 +46,9 @@ async function main(argv: readonly string[]): Promise<number> {
   if (command === "limits") {
     const result = await readLimits({
       nowMs: startedAt,
-      hubUrl: env.LEDGER_HUB_URL,
-      hubKey: env.LEDGER_HUB_KEY,
-      openCodeGo: env.LEDGER_OPENCODE_GO === "1",
+      hubUrl: env.USAGEMETER_HUB_URL,
+      hubKey: env.USAGEMETER_HUB_KEY,
+      openCodeGo: env.USAGEMETER_OPENCODE_GO === "1",
       env,
     });
     write({ version: OUTPUT_VERSION, checkedAt: new Date().toISOString(), ...result });

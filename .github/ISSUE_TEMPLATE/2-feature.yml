@@ -1,0 +1,16 @@
+name: Feature request
+description: A new agent, number, or view for the pane
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What you want to see
+      description: The question you want the pane to answer, and for which agent or plan.
+    validations:
+      required: true
+  - type: textarea
+    id: source
+    attributes:
+      label: Where the data lives
+      description: If you know where the agent stores its history or exposes its limits, say so.

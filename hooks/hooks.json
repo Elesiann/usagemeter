@@ -1,1 +1,1 @@
-{ "description": "The ledger hooks module", "modules": ["./register.js"] }
+{ "description": "The usagemeter hooks module", "modules": ["./register.js"] }

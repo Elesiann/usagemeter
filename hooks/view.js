@@ -1,4 +1,4 @@
-// Builds the /ledger pane from plain state. Takes the resolved elements
+// Builds the /usagemeter pane from plain state. Takes the resolved elements
 // (`$.ui.resolve(e)`), never `$`, so it stays a pure function of its input.
 import { barChart, meter, splitBar } from './charts.js'
 import {
@@ -218,7 +218,7 @@ function usageTab(el, s, width) {
   const chartW = wide ? width - SIDE - 3 : width
   // Side by side, the chart (title, bars, x labels) is as tall as the summary
   // (headline, sessions, blank, then three rows per provider less the last blank).
-  const sideHeight = Math.max(6, Math.min(16, 3 * range.providers.length))
+  const sideHeight = Math.max(8, Math.min(16, 3 * range.providers.length))
   const top = wide
     ? row(el, [col(el, [summary(el, s, range, metric, SIDE)], { width: SIDE }), chart(el, s, range, metric, chartW, sideHeight)], { columnGap: 3 })
     : col(el, [summary(el, s, range, metric, Math.min(width, SIDE)), blank(el), chart(el, s, range, metric, chartW, 10)])
@@ -259,11 +259,11 @@ function limitsTab(el, s, width) {
   // Label, percent (9), pace (3) and reset text share the row with the meter.
   // A narrow pane gets a shorter label and only the time left before reset.
   const narrow = width < 90
-  const labelW = narrow ? 14 : 24
+  const labelW = narrow ? 14 : 26
   const resetW = narrow ? 11 : 28
   const barW = Math.max(4, Math.min(60, width - (labelW + 12 + resetW)))
   for (const [provider, list] of byProvider) {
-    groups.push(text(el, providerLabel(provider), { bold: true, color: providerColor(provider) }))
+    groups.push(text(el, provider === 'claude' ? 'Claude' : providerLabel(provider), { bold: true, color: providerColor(provider) }))
     for (const account of list) {
       const extra = [account.plan, account.resetCredits ? account.resetCredits + ' reset' + (account.resetCredits > 1 ? 's' : '') + ' banked' : null].filter(Boolean).join(' · ')
       if (list.length > 1 || extra || account.label === 'this session') groups.push(text(el, '  ' + account.label + (extra ? ' · ' + extra : ''), { dimColor: true }))
@@ -273,7 +273,8 @@ function limitsTab(el, s, width) {
         const until = w.resetsAt ? '↻ ' + duration(Date.parse(w.resetsAt) - s.nowMs) : ''
         const reset = w.resetsAt && !narrow ? until + ' · ' + clockLabel(w.resetsAt, s.nowMs, s.timeZone) : until
         groups.push(row(el, [
-          text(el, '  ' + w.label.padEnd(labelW - 2).slice(0, labelW - 2)),
+          // At least one space always separates the label from the percent.
+          text(el, '  ' + w.label.slice(0, labelW - 3).padEnd(labelW - 2)),
           text(el, (Math.round(left) + '% left').padStart(9), { bold: true }),
           text(el, (pace(w, s.nowMs) || '  ').padEnd(3), { dimColor: true }),
           ...lines(el, [meter(left / 100, barW, providerColor(provider))], 'meter-' + w.id),
@@ -288,7 +289,7 @@ function limitsTab(el, s, width) {
   }
   const notes = []
   const hub = s.limits?.hub
-  if (hub?.status === 'off') notes.push('CLIProxyAPI hub not configured: set hubUrl and hubKey with /plugin configure ledger.')
+  if (hub?.status === 'off') notes.push('CLIProxyAPI hub not configured: set hubUrl and hubKey with /plugin configure usagemeter.')
   if (hub?.status === 'error') notes.push('CLIProxyAPI hub: ' + hub.message)
   const go = s.limits?.openCodeGo
   if (go?.status === 'error' || go?.status === 'unsupported') notes.push('OpenCode Go: ' + go.message)

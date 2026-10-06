@@ -1,3 +1,4 @@
+// usagemeter-helper (MIT). Bundles T3 Code (MIT), stream-json and stream-chain (BSD-3-Clause): see THIRD_PARTY_NOTICES.md.
 var __defProp = Object.defineProperty;
 var __returnValue = (v) => v;
 function __exportSetter(name, newValue) {
@@ -2766,7 +2767,7 @@ function dedupeWithinFile(records, seen = /* @__PURE__ */ new Set) {
 import { existsSync, realpathSync } from "node:fs";
 import * as os2 from "node:os";
 import * as path3 from "node:path";
-var historyHome = (env) => env.LEDGER_HOME?.trim() || env.HOME?.trim() || os2.homedir(), canonical = (dir) => {
+var historyHome = (env) => env.USAGEMETER_HOME?.trim() || env.HOME?.trim() || os2.homedir(), canonical = (dir) => {
   try {
     return realpathSync(dir);
   } catch {
@@ -3031,10 +3032,10 @@ async function scan(options) {
 // helper/src/main.ts
 var OUTPUT_VERSION = 1;
 function cacheDir(env) {
-  if (env.LEDGER_CACHE_DIR?.trim())
-    return env.LEDGER_CACHE_DIR.trim();
+  if (env.USAGEMETER_CACHE_DIR?.trim())
+    return env.USAGEMETER_CACHE_DIR.trim();
   let xdg = env.XDG_CACHE_HOME?.trim();
-  return path5.join(xdg && path5.isAbsolute(xdg) ? xdg : path5.join(os3.homedir(), ".cache"), "ledger");
+  return path5.join(xdg && path5.isAbsolute(xdg) ? xdg : path5.join(os3.homedir(), ".cache"), "usagemeter");
 }
 function flag(args, name) {
   let index = args.indexOf(name);
@@ -3056,9 +3057,9 @@ async function main(argv) {
   if (command === "limits") {
     let result = await readLimits({
       nowMs: startedAt,
-      hubUrl: env.LEDGER_HUB_URL,
-      hubKey: env.LEDGER_HUB_KEY,
-      openCodeGo: env.LEDGER_OPENCODE_GO === "1",
+      hubUrl: env.USAGEMETER_HUB_URL,
+      hubKey: env.USAGEMETER_HUB_KEY,
+      openCodeGo: env.USAGEMETER_OPENCODE_GO === "1",
       env
     });
     return write({ version: OUTPUT_VERSION, checkedAt: (/* @__PURE__ */ new Date()).toISOString(), ...result }), 0;

@@ -22,7 +22,7 @@ const claudeLine = (id: number, timestamp: string, outputTokens: number, model =
   }) + "\n";
 
 test("scan prices Claude records, dedupes copies across files and fills empty days", async () => {
-  const home = await mkdtemp(path.join(os.tmpdir(), "ledger-test-"));
+  const home = await mkdtemp(path.join(os.tmpdir(), "usagemeter-test-"));
   try {
     const projects = path.join(home, "claude", "projects", "proj");
     await mkdir(projects, { recursive: true });
@@ -59,7 +59,7 @@ test("scan prices Claude records, dedupes copies across files and fills empty da
 });
 
 test("a Codex home that symlinks the default one is read once", async () => {
-  const home = await mkdtemp(path.join(os.tmpdir(), "ledger-test-"));
+  const home = await mkdtemp(path.join(os.tmpdir(), "usagemeter-test-"));
   try {
     await mkdir(path.join(home, ".codex", "sessions"), { recursive: true });
     await mkdir(path.join(home, "lane"), { recursive: true });
@@ -232,7 +232,7 @@ test("an unreachable hub is reported with the network error code only", async ()
 });
 
 test("the 24h range covers every record of the past 24 hours", async () => {
-  const home = await mkdtemp(path.join(os.tmpdir(), "ledger-test-"));
+  const home = await mkdtemp(path.join(os.tmpdir(), "usagemeter-test-"));
   try {
     const projects = path.join(home, ".claude", "projects", "p");
     await mkdir(projects, { recursive: true });
@@ -247,7 +247,7 @@ test("the 24h range covers every record of the past 24 hours", async () => {
   }
 });
 
-test("LEDGER_HOME points the scan at another home", () => {
-  const sources = transcriptSources({ LEDGER_HOME: "/tmp/elsewhere", HOME: "/tmp/mine" });
+test("USAGEMETER_HOME points the scan at another home", () => {
+  const sources = transcriptSources({ USAGEMETER_HOME: "/tmp/elsewhere", HOME: "/tmp/mine" });
   assert.deepEqual(sources.map((s) => s.dir), ["/tmp/elsewhere/.claude/projects", "/tmp/elsewhere/.codex/sessions"]);
 });
