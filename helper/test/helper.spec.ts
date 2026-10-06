@@ -6,7 +6,7 @@ import { test } from "node:test";
 
 import { createServer } from "node:http";
 
-import { availableCredits, claudeWindows, codexWindows, readLimits } from "../src/limits.ts";
+import { antigravityWindows, availableCredits, claudeWindows, codexWindows, readLimits } from "../src/limits.ts";
 import { scan, shiftDay } from "../src/scan.ts";
 import { transcriptSources } from "../src/sources.ts";
 import { createOverrideRateTable } from "../src/t3/usage/usagePricing.ts";
@@ -122,6 +122,7 @@ test("hub limits follow CLIProxyAPI's management contract", async () => {
             { id: "b", auth_index: 1, provider: "claude", email: "k@example.com" },
             { id: "c", auth_index: 2, provider: "claude", disabled: true },
             { id: "d", auth_index: 3, provider: "gemini" },
+            { id: "e", auth_index: 4, provider: "antigravity", email: "a@example.com", project_id: "proj-9" },
           ],
         });
       }
@@ -130,6 +131,11 @@ test("hub limits follow CLIProxyAPI's management contract", async () => {
         if (upstream.endsWith("/wham/usage")) return send({ status_code: 200, body: JSON.stringify({ plan_type: "plus", rate_limit: { secondary_window: { used_percent: 62, reset_at: 4070908800, limit_window_seconds: 604800 } } }) });
         if (upstream.endsWith("/rate-limit-reset-credits")) return send({ status_code: 200, body: JSON.stringify({ credits: [{ id: "x", status: "available", reset_type: "codex_rate_limits", expires_at: "2099-01-01T00:00:00Z" }] }) });
         if (upstream.endsWith("/api/oauth/usage")) return send({ status_code: 500, body: "do-not-publish" });
+        // The daily host fails, so the production host must be tried next.
+        if (upstream.startsWith("https://daily-cloudcode-pa")) return send({ status_code: 503, body: "" });
+        if (upstream === "https://cloudcode-pa.googleapis.com/v1internal:fetchAvailableModels") {
+          return send({ status_code: 200, body: JSON.stringify({ models: { "gemini-3-pro": { displayName: "Gemini 3 Pro", quotaInfo: { remainingFraction: 0.25, resetTime: "2026-10-06T03:00:00Z" } } } }) });
+        }
       }
       res.statusCode = 404;
       res.end();
@@ -151,8 +157,32 @@ test("hub limits follow CLIProxyAPI's management contract", async () => {
     const claude = out.accounts.find((a) => a.provider === "claude")!;
     assert.match(claude.error ?? "", /HTTP 500/);
     assert.ok(!JSON.stringify(out).includes("do-not-publish"));
-    assert.equal(out.accounts.length, 2);
+    const ag = out.accounts.find((a) => a.provider === "antigravity")!;
+    assert.deepEqual(ag.windows.map((w) => [w.label, w.usedPercent]), [["Gemini", 75]]);
+    const agCall = seen.find((r) => String(r.body?.url).startsWith("https://cloudcode-pa"))!;
+    assert.equal(agCall.body.method, "POST");
+    assert.deepEqual(JSON.parse(agCall.body.data), { project: "proj-9" });
+    assert.equal(agCall.body.header["User-Agent"], "antigravity");
+    assert.equal(out.accounts.length, 3);
   } finally {
     server.close();
   }
+});
+
+test("Antigravity models collapse into families, worst member and earliest reset", () => {
+  const windows = antigravityWindows({
+    models: {
+      "gemini-3-pro": { displayName: "Gemini 3 Pro", quotaInfo: { remainingFraction: 0.9, resetTime: "2026-10-06T05:00:00Z" } },
+      "gemini-3-flash": { displayName: "Gemini 3 Flash", quotaInfo: { remainingFraction: 0.4, resetTime: "2026-10-06T04:00:00Z" } },
+      "claude-sonnet-5-5": { displayName: "Claude Sonnet 5.5", quotaInfo: { remainingFraction: 1 } },
+      "gpt-oss": { displayName: "GPT-OSS", quotaInfo: { isExhausted: true } },
+      "gemini-3-flash-image": { quotaInfo: { remainingFraction: 0 } },
+      "tab_flash": { quotaInfo: { remainingFraction: 0 } },
+      "no-quota": { displayName: "Other" },
+    },
+  });
+  assert.deepEqual(
+    windows.map((w) => [w.label, w.usedPercent, w.resetsAt ?? null]),
+    [["Claude + GPT", 100, null], ["Gemini", 60, "2026-10-06T04:00:00.000Z"]],
+  );
 });

@@ -21,7 +21,7 @@ import * as path5 from "node:path";
 import { readFile } from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-var SESSION_MINS = 300, WEEK_MINS = 10080, MONTH_MINS = 43200, HUB_TIMEOUT_MS = 15000, CODEX_BASE = "https://chatgpt.com/backend-api/wham", clamp = (value) => Math.min(100, Math.max(0, Number.isFinite(value) ? value : 0)), isRecord = (value) => typeof value === "object" && value !== null && !Array.isArray(value), kindFor = (mins) => mins >= MONTH_MINS ? "monthly" : mins >= WEEK_MINS ? "weekly" : "session", labelFor = (kind) => kind === "session" ? "Session" : kind === "weekly" ? "Weekly" : kind === "monthly" ? "Monthly" : "Other", isoFromEpochSeconds = (value) => typeof value === "number" && Number.isFinite(value) && value > 0 ? new Date(value * 1000).toISOString() : void 0, isoFromString = (value) => typeof value === "string" && !Number.isNaN(Date.parse(value)) ? new Date(value).toISOString() : void 0;
+var SESSION_MINS = 300, WEEK_MINS = 10080, MONTH_MINS = 43200, HUB_TIMEOUT_MS = 15000, CODEX_BASE = "https://chatgpt.com/backend-api/wham", ANTIGRAVITY_HOSTS = ["https://daily-cloudcode-pa.googleapis.com", "https://cloudcode-pa.googleapis.com"], clamp = (value) => Math.min(100, Math.max(0, Number.isFinite(value) ? value : 0)), isRecord = (value) => typeof value === "object" && value !== null && !Array.isArray(value), kindFor = (mins) => mins >= MONTH_MINS ? "monthly" : mins >= WEEK_MINS ? "weekly" : "session", labelFor = (kind) => kind === "session" ? "Session" : kind === "weekly" ? "Weekly" : kind === "monthly" ? "Monthly" : "Other", isoFromEpochSeconds = (value) => typeof value === "number" && Number.isFinite(value) && value > 0 ? new Date(value * 1000).toISOString() : void 0, isoFromString = (value) => typeof value === "string" && !Number.isNaN(Date.parse(value)) ? new Date(value).toISOString() : void 0;
 function codexWindows(usage) {
   if (!isRecord(usage) || !isRecord(usage.rate_limit))
     return [];
@@ -69,6 +69,31 @@ function availableCredits(response, nowMs) {
     return 0;
   return response.credits.filter((credit) => isRecord(credit) && credit.reset_type === "codex_rate_limits" && credit.status === "available" && typeof credit.expires_at === "string" && Date.parse(credit.expires_at) > nowMs).length;
 }
+var excludedAntigravityModel = (id) => /^(chat_|tab_|rev_)/.test(id) || id.includes("image") || id.includes("mquery") || id.includes("lite");
+function antigravityWindows(response) {
+  if (!isRecord(response) || !isRecord(response.models))
+    return [];
+  let families = /* @__PURE__ */ new Map;
+  for (let [id, info] of Object.entries(response.models)) {
+    if (!isRecord(info) || !isRecord(info.quotaInfo) || excludedAntigravityModel(id))
+      continue;
+    let quota = info.quotaInfo, remaining = quota.remainingFraction, used = typeof remaining === "number" ? clamp(remaining <= 1 ? (1 - remaining) * 100 : 100 - remaining) : quota.isExhausted === !0 ? 100 : null;
+    if (used === null)
+      continue;
+    let name = `${id} ${typeof info.displayName === "string" ? info.displayName : ""}`.toLowerCase(), family = name.includes("gemini") ? "Gemini" : name.includes("claude") || name.includes("gpt") ? "Claude + GPT" : typeof info.displayName === "string" ? info.displayName : id, resetsAt = isoFromString(quota.resetTime), current = families.get(family);
+    families.set(family, {
+      used: Math.max(current?.used ?? 0, used),
+      resetsAt: [current?.resetsAt, resetsAt].filter((v) => !!v).sort((x, y) => Date.parse(x) - Date.parse(y))[0]
+    });
+  }
+  return [...families.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([family, { used, resetsAt }]) => ({
+    id: "ag_" + family.toLowerCase().replace(/[^a-z0-9]+/g, "_"),
+    label: family,
+    kind: "other",
+    usedPercent: used,
+    ...resetsAt ? { resetsAt } : {}
+  }));
+}
 function openCodeGoWindows(response) {
   if (!isRecord(response) || !isRecord(response.usage))
     return [];
@@ -93,14 +118,20 @@ async function management(hub, route, body) {
     throw Error(`The hub answered HTTP ${response.status}.`);
   return response.json();
 }
-async function apiCall(hub, account, url) {
-  let header = account.provider === "codex" ? {
+async function apiCall(hub, account, url, data) {
+  let header = account.provider === "antigravity" ? { Authorization: "Bearer $TOKEN$", "Content-Type": "application/json", Accept: "application/json", "User-Agent": "antigravity" } : account.provider === "codex" ? {
     Authorization: "Bearer $TOKEN$",
     "Content-Type": "application/json",
     "OpenAI-Beta": "codex-1",
     Originator: "Codex Desktop",
     ...account.id_token?.chatgpt_account_id ? { "Chatgpt-Account-Id": account.id_token.chatgpt_account_id } : {}
-  } : { Authorization: "Bearer $TOKEN$", "anthropic-beta": "oauth-2025-04-20" }, raw = await management(hub, "api-call", { auth_index: account.auth_index, method: "GET", url, header });
+  } : { Authorization: "Bearer $TOKEN$", "anthropic-beta": "oauth-2025-04-20" }, raw = await management(hub, "api-call", {
+    auth_index: account.auth_index,
+    method: data === void 0 ? "GET" : "POST",
+    url,
+    header,
+    ...data === void 0 ? {} : { data: JSON.stringify(data) }
+  });
   if (!isRecord(raw) || typeof raw.status_code !== "number")
     throw Error("The hub returned an unexpected answer.");
   if (raw.status_code < 200 || raw.status_code >= 300)
@@ -108,9 +139,21 @@ async function apiCall(hub, account, url) {
   return typeof raw.body === "string" ? JSON.parse(raw.body) : raw.body;
 }
 var planLabel = (plan) => typeof plan === "string" && plan ? plan.charAt(0).toUpperCase() + plan.slice(1) : void 0;
+async function readAntigravity(hub, account) {
+  let body = account.project_id ? { project: account.project_id } : {}, lastError;
+  for (let host of ANTIGRAVITY_HOSTS)
+    try {
+      return await apiCall(hub, account, `${host}/v1internal:fetchAvailableModels`, body);
+    } catch (error) {
+      lastError = error;
+    }
+  throw lastError;
+}
 async function readHubAccount(hub, account, nowMs) {
-  let provider = account.provider === "codex" ? "codex" : "claude", label = account.email || (provider === "codex" ? "Codex account" : "Claude account");
+  let provider = account.provider === "codex" ? "codex" : account.provider === "antigravity" ? "antigravity" : "claude", label = account.email || { codex: "Codex account", claude: "Claude account", antigravity: "Antigravity account" }[provider];
   try {
+    if (provider === "antigravity")
+      return { provider, label, windows: antigravityWindows(await readAntigravity(hub, account)) };
     if (provider === "claude") {
       let usage = await apiCall(hub, account, "https://api.anthropic.com/api/oauth/usage");
       return { provider, label, windows: claudeWindows(usage) };
@@ -130,7 +173,7 @@ async function readHub(hub, nowMs) {
   } catch (error) {
     return { accounts: [], status: { status: "error", message: error instanceof Error ? error.message : "The hub could not list accounts." } };
   }
-  let usable = (isRecord(listed) && Array.isArray(listed.files) ? listed.files : []).filter((file) => isRecord(file) && !file.disabled && (file.provider === "codex" || file.provider === "claude"));
+  let usable = (isRecord(listed) && Array.isArray(listed.files) ? listed.files : []).filter((file) => isRecord(file) && !file.disabled && ["codex", "claude", "antigravity"].includes(file.provider));
   return { accounts: await Promise.all(usable.map((file) => readHubAccount(hub, file, nowMs))), status: { status: "ok" } };
 }
 async function readOpenCodeGo(env) {

@@ -54,6 +54,9 @@ prompt; Ctrl+X then ← makes a docked pane wider.
 - **Claude**: every Claude account in the hub, or else this session's own
   5-hour and weekly windows (available after the session's first reply).
 - **Codex**: every Codex account in the hub, with banked reset credits.
+- **Antigravity**: every Antigravity account in the hub, one window per model
+  family (Gemini, Claude + GPT). This reads Google's internal Code Assist
+  `fetchAvailableModels` endpoint, which is undocumented and may change.
 - **OpenCode Go**: optional, from OpenCode's own `auth.json` key or
   `OPENCODE_API_KEY`.
 

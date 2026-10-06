@@ -17,7 +17,7 @@ export interface LimitWindow {
 }
 
 export interface LimitAccount {
-  readonly provider: "codex" | "claude" | "opencode-go";
+  readonly provider: "codex" | "claude" | "antigravity" | "opencode-go";
   readonly label: string;
   readonly plan?: string;
   readonly windows: LimitWindow[];
@@ -37,6 +37,12 @@ const WEEK_MINS = 7 * 24 * 60;
 const MONTH_MINS = 30 * 24 * 60;
 const HUB_TIMEOUT_MS = 15_000;
 const CODEX_BASE = "https://chatgpt.com/backend-api/wham";
+/**
+ * Antigravity's Code Assist hosts. The daily host is the one Antigravity
+ * itself and CLIProxyAPI use; paid tiers are reported to get wrong session
+ * numbers from the production host, which is only the fallback.
+ */
+const ANTIGRAVITY_HOSTS = ["https://daily-cloudcode-pa.googleapis.com", "https://cloudcode-pa.googleapis.com"];
 
 const clamp = (value: number): number => Math.min(100, Math.max(0, Number.isFinite(value) ? value : 0));
 const isRecord = (value: unknown): value is Record<string, unknown> =>
@@ -105,6 +111,46 @@ export function availableCredits(response: unknown, nowMs: number): number {
   ).length;
 }
 
+/** Internal or feature-specific Antigravity model ids that carry no user-facing quota. */
+const excludedAntigravityModel = (id: string): boolean =>
+  /^(chat_|tab_|rev_)/.test(id) || id.includes("image") || id.includes("mquery") || id.includes("lite");
+
+/**
+ * Antigravity `fetchAvailableModels` → one window per model family, as
+ * Antigravity groups its quota: Gemini, and Claude with GPT. Each family shows
+ * its most used member and its earliest reset. `remainingFraction` is 0..1;
+ * a value above 1 is read as a percentage left.
+ */
+export function antigravityWindows(response: unknown): LimitWindow[] {
+  if (!isRecord(response) || !isRecord(response.models)) return [];
+  const families = new Map<string, { used: number; resetsAt?: string }>();
+  for (const [id, info] of Object.entries(response.models)) {
+    if (!isRecord(info) || !isRecord(info.quotaInfo) || excludedAntigravityModel(id)) continue;
+    const quota = info.quotaInfo;
+    const remaining = quota.remainingFraction;
+    const used =
+      typeof remaining === "number" ? clamp(remaining <= 1 ? (1 - remaining) * 100 : 100 - remaining) : quota.isExhausted === true ? 100 : null;
+    if (used === null) continue;
+    const name = `${id} ${typeof info.displayName === "string" ? info.displayName : ""}`.toLowerCase();
+    const family = name.includes("gemini") ? "Gemini" : name.includes("claude") || name.includes("gpt") ? "Claude + GPT" : typeof info.displayName === "string" ? info.displayName : id;
+    const resetsAt = isoFromString(quota.resetTime);
+    const current = families.get(family);
+    families.set(family, {
+      used: Math.max(current?.used ?? 0, used),
+      resetsAt: [current?.resetsAt, resetsAt].filter((v): v is string => !!v).sort((x, y) => Date.parse(x) - Date.parse(y))[0],
+    });
+  }
+  return [...families.entries()]
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([family, { used, resetsAt }]) => ({
+      id: "ag_" + family.toLowerCase().replace(/[^a-z0-9]+/g, "_"),
+      label: family,
+      kind: "other" as const,
+      usedPercent: used,
+      ...(resetsAt ? { resetsAt } : {}),
+    }));
+}
+
 /** OpenCode Go `usage` → rolling, weekly and monthly windows. */
 export function openCodeGoWindows(response: unknown): LimitWindow[] {
   if (!isRecord(response) || !isRecord(response.usage)) return [];
@@ -138,14 +184,17 @@ interface AuthFile {
   readonly auth_index: unknown;
   readonly provider: string;
   readonly email?: string;
+  readonly project_id?: string;
   readonly disabled?: boolean;
   readonly id_token?: { readonly chatgpt_account_id?: string; readonly chatgpt_plan_type?: string };
 }
 
 /** One upstream read through the hub's `api-call`, which substitutes the account's token for `$TOKEN$`. */
-async function apiCall(hub: HubConfig, account: AuthFile, url: string): Promise<unknown> {
+async function apiCall(hub: HubConfig, account: AuthFile, url: string, data?: unknown): Promise<unknown> {
   const header =
-    account.provider === "codex"
+    account.provider === "antigravity"
+      ? { Authorization: "Bearer $TOKEN$", "Content-Type": "application/json", Accept: "application/json", "User-Agent": "antigravity" }
+      : account.provider === "codex"
       ? {
           Authorization: "Bearer $TOKEN$",
           "Content-Type": "application/json",
@@ -154,7 +203,13 @@ async function apiCall(hub: HubConfig, account: AuthFile, url: string): Promise<
           ...(account.id_token?.chatgpt_account_id ? { "Chatgpt-Account-Id": account.id_token.chatgpt_account_id } : {}),
         }
       : { Authorization: "Bearer $TOKEN$", "anthropic-beta": "oauth-2025-04-20" };
-  const raw = await management(hub, "api-call", { auth_index: account.auth_index, method: "GET", url, header });
+  const raw = await management(hub, "api-call", {
+    auth_index: account.auth_index,
+    method: data === undefined ? "GET" : "POST",
+    url,
+    header,
+    ...(data === undefined ? {} : { data: JSON.stringify(data) }),
+  });
   if (!isRecord(raw) || typeof raw.status_code !== "number") throw new Error("The hub returned an unexpected answer.");
   // The upstream body is never surfaced: it can carry account details.
   if (raw.status_code < 200 || raw.status_code >= 300) throw new Error(`The provider refused the hub request (HTTP ${raw.status_code}).`);
@@ -164,10 +219,26 @@ async function apiCall(hub: HubConfig, account: AuthFile, url: string): Promise<
 const planLabel = (plan: unknown): string | undefined =>
   typeof plan === "string" && plan ? plan.charAt(0).toUpperCase() + plan.slice(1) : undefined;
 
+async function readAntigravity(hub: HubConfig, account: AuthFile): Promise<unknown> {
+  const body = account.project_id ? { project: account.project_id } : {};
+  let lastError: unknown;
+  for (const host of ANTIGRAVITY_HOSTS) {
+    try {
+      return await apiCall(hub, account, `${host}/v1internal:fetchAvailableModels`, body);
+    } catch (error) {
+      lastError = error;
+    }
+  }
+  throw lastError;
+}
+
 async function readHubAccount(hub: HubConfig, account: AuthFile, nowMs: number): Promise<LimitAccount> {
-  const provider = account.provider === "codex" ? "codex" : "claude";
-  const label = account.email || (provider === "codex" ? "Codex account" : "Claude account");
+  const provider = account.provider === "codex" ? "codex" : account.provider === "antigravity" ? "antigravity" : "claude";
+  const label = account.email || ({ codex: "Codex account", claude: "Claude account", antigravity: "Antigravity account" } as const)[provider];
   try {
+    if (provider === "antigravity") {
+      return { provider, label, windows: antigravityWindows(await readAntigravity(hub, account)) };
+    }
     if (provider === "claude") {
       const usage = await apiCall(hub, account, "https://api.anthropic.com/api/oauth/usage");
       return { provider, label, windows: claudeWindows(usage) };
@@ -193,7 +264,7 @@ async function readHub(hub: HubConfig, nowMs: number): Promise<{ accounts: Limit
     return { accounts: [], status: { status: "error", message: error instanceof Error ? error.message : "The hub could not list accounts." } };
   }
   const files = isRecord(listed) && Array.isArray(listed.files) ? (listed.files as AuthFile[]) : [];
-  const usable = files.filter((file) => isRecord(file) && !file.disabled && (file.provider === "codex" || file.provider === "claude"));
+  const usable = files.filter((file) => isRecord(file) && !file.disabled && ["codex", "claude", "antigravity"].includes(file.provider));
   const accounts = await Promise.all(usable.map((file) => readHubAccount(hub, file, nowMs)));
   return { accounts, status: { status: "ok" } };
 }
