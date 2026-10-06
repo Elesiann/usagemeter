@@ -212,10 +212,10 @@ See [SECURITY.md](SECURITY.md) for details and how to report a vulnerability.
 
 | You see | Do this |
 | --- | --- |
-| `usagemeter needs Node.js 22.5 or later on PATH` | Install Node.js 22.5+ and check that `node --version` works in the shell that starts Claude Code |
+| A message starting `usagemeter needs Node.js 22.5 or later on PATH` | Install Node.js 22.5+ and check that `node --version` works in the shell that starts Claude Code |
 | `CLIProxyAPI hub not configured` | Set `hubKey` (and `hubUrl` if the hub is not on port 8317), then restart |
 | `The hub could not be reached (ECONNREFUSED)` | Start CLIProxyAPI, or fix `hubUrl` |
-| `The hub answered HTTP 401` | The management key is wrong; set it again |
+| `The hub answered HTTP 401.` | The management key is wrong; set it again |
 | Claude limits are empty without a hub | This session has had no reply yet; they appear after the first one |
 | `/usagemeter` is missing | Run `/plugin`, check that `usagemeter` is enabled, then `/reload-plugins` |
 | The pane is cramped | Widen it with Ctrl+X then ←, or use a wider terminal |

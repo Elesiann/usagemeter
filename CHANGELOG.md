@@ -6,7 +6,7 @@ All notable changes to usagemeter are listed here. The format follows
 
 ## [Unreleased]
 
-## [0.2.0] - 2026-10-06
+## [0.2.0] - 2026-10-05
 
 First public release.
 
@@ -22,7 +22,8 @@ First public release.
 
 ### Changed
 
-- The past-24-hours range covers the whole previous day, in 25 hourly buckets.
+- The past-24-hours range totals exactly the last 24 hours, drawn in hourly
+  buckets.
 - The summary column aligns its values, and the chart beside it takes the
   same height.
 - Plan limits are read again every time the pane opens.

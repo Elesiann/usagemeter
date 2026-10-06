@@ -122,6 +122,8 @@ interface Window {
   readonly sinceDay: string;
   readonly untilDay: string;
   readonly resolution: "day" | "hour";
+  /** Records before this instant are left out, so a range of whole-hour buckets totals an exact span. */
+  readonly sinceMs?: number;
 }
 
 function makeWindows(nowMs: number, timeZone: string, rates: RateTable): Window[] {
@@ -141,12 +143,14 @@ function makeWindows(nowMs: number, timeZone: string, rates: RateTable): Window[
     });
   }
   // Whole hours from the one 24 hours ago through the current one, so every
-  // record of the past 24 hours falls inside: 25 hourly buckets.
+  // record of the past 24 hours has a bucket: 25 hourly buckets.
   const untilTimeMs = Math.floor(nowMs / HOUR_MS) * HOUR_MS + HOUR_MS;
   const sinceTimeMs = untilTimeMs - DAY_MS - HOUR_MS;
   const toDay = dayFormatter(timeZone);
   windows.unshift({
     id: "24h",
+    // The buckets are whole hours; the first is only partly inside the past 24 hours.
+    sinceMs: nowMs - DAY_MS,
     aggregator: new UsageAggregator({
       timeZone,
       sinceDay: toDay(sinceTimeMs),
@@ -330,6 +334,7 @@ export async function scan(options: ScanOptions): Promise<ScanOutput> {
 
   const add = (provider: UsageProviderKind, dir: string, record: UsageRecord) => {
     for (const window of windows) {
+      if (window.sinceMs !== undefined && record.timestampMs < window.sinceMs) continue;
       if (window.aggregator.add(record, dir) && record.sessionId.length > 0) {
         let ids = window.sessions.get(provider);
         if (!ids) window.sessions.set(provider, (ids = new Set()));

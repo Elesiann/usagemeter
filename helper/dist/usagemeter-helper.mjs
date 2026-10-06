@@ -2837,6 +2837,7 @@ function makeWindows(nowMs, timeZone, rates) {
   let untilTimeMs = Math.floor(nowMs / HOUR_MS2) * HOUR_MS2 + HOUR_MS2, sinceTimeMs = untilTimeMs - DAY_MS - HOUR_MS2, toDay = dayFormatter(timeZone);
   return windows.unshift({
     id: "24h",
+    sinceMs: nowMs - DAY_MS,
     aggregator: new UsageAggregator({
       timeZone,
       sinceDay: toDay(sinceTimeMs),
@@ -2951,13 +2952,16 @@ function sharedCodexSessions(files) {
 }
 async function scan(options) {
   let { nowMs, timeZone, rates, cacheDir } = options, env = options.env ?? process.env, windows = makeWindows(nowMs, timeZone, rates), windowStartMs = Date.parse(windows.at(-1).sinceDay + "T00:00:00Z") - MTIME_SLACK_MS, retentionCutoffMs = nowMs - RETENTION_DAYS * DAY_MS, cacheFile = path4.join(cacheDir, CACHE_FILE), cache = await loadCache(cacheFile), cacheDirty = !1, sources = [], add = (provider, dir, record) => {
-    for (let window of windows)
+    for (let window of windows) {
+      if (window.sinceMs !== void 0 && record.timestampMs < window.sinceMs)
+        continue;
       if (window.aggregator.add(record, dir) && record.sessionId.length > 0) {
         let ids = window.sessions.get(provider);
         if (!ids)
           window.sessions.set(provider, ids = /* @__PURE__ */ new Set);
         ids.add(record.sessionId);
       }
+    }
   };
   for (let { provider, dir } of transcriptSources(env)) {
     let files;

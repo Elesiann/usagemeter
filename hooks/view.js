@@ -260,8 +260,9 @@ function limitsTab(el, s, width) {
   // A narrow pane gets a shorter label and only the time left before reset.
   const narrow = width < 90
   const labelW = narrow ? 14 : 26
-  const resetW = narrow ? 11 : 28
-  const barW = Math.max(4, Math.min(60, width - (labelW + 12 + resetW)))
+  const resetW = narrow ? 10 : 28
+  // At the 40-column minimum: 14 + 9 + 3 + 3 + 10 = 39.
+  const barW = Math.max(3, Math.min(60, width - (labelW + 12 + resetW)))
   for (const [provider, list] of byProvider) {
     groups.push(text(el, provider === 'claude' ? 'Claude' : providerLabel(provider), { bold: true, color: providerColor(provider) }))
     for (const account of list) {

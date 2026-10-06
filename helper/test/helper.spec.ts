@@ -236,8 +236,8 @@ test("the 24h range covers every record of the past 24 hours", async () => {
   try {
     const projects = path.join(home, ".claude", "projects", "p");
     await mkdir(projects, { recursive: true });
-    // At 12:01, yesterday's 12:30 record is 23h31m old and must count; 11:30 is older than a day.
-    await writeFile(path.join(projects, "a.jsonl"), claudeLine(1, "2026-10-04T12:30:00Z", 7) + claudeLine(2, "2026-10-04T11:30:00Z", 5));
+    // At 12:01, yesterday's 12:30 record is 23h31m old and must count; 12:00 and 11:30 are older than a day.
+    await writeFile(path.join(projects, "a.jsonl"), claudeLine(1, "2026-10-04T12:30:00Z", 7) + claudeLine(2, "2026-10-04T11:30:00Z", 5) + claudeLine(3, "2026-10-04T12:00:00Z", 3));
     const rates = createOverrideRateTable({});
     const result = await scan({ nowMs: Date.parse("2026-10-05T12:01:00Z"), timeZone: "UTC", rates, cacheDir: path.join(home, "cache"), env: { HOME: home } });
     assert.equal(result.ranges["24h"].total.output, 7);
