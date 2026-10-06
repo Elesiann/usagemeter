@@ -98,7 +98,7 @@ function summary(el, s, range, metric, width) {
   return col(el, children)
 }
 
-function chart(el, s, range, metric, width) {
+function chart(el, s, range, metric, width, height) {
   const columns = range.points.map((point) => ({
     total: metric === 'cost' ? point.costUsd : point.tokens,
     label: pointLabel(point, range.resolution, s.usage.timeZone),
@@ -108,13 +108,14 @@ function chart(el, s, range, metric, width) {
       color: providerColor(provider),
     })),
   }))
-  const { rows } = barChart({ columns, width, height: 10, format: metric === 'cost' ? (n) => '$' + compact(n) : tokens })
+  const { rows } = barChart({ columns, width, height, format: metric === 'cost' ? (n) => '$' + compact(n) : tokens })
   const title = (range.resolution === 'hour' ? 'Hourly ' : 'Daily ') + (metric === 'cost' ? 'cost' : 'processed tokens')
   return col(el, [text(el, title, { bold: true }), ...lines(el, rows, 'chart')])
 }
 
 /** `$1.2K`, `$350`: short money for chart axes and bar labels. */
 function compact(n) {
+  if (n === 0) return '0'
   if (n >= 1000) return (n / 1000).toFixed(1) + 'K'
   if (n >= 100) return Math.round(n).toString()
   if (n >= 1) return n.toFixed(1)
@@ -213,13 +214,16 @@ function usageTab(el, s, width) {
   const metric = s.tab
   const wide = width >= WIDE
   const chartW = wide ? width - SIDE - 3 : width
+  // Side by side, the chart (title, bars, x labels) is as tall as the summary
+  // (headline, sessions, blank, then three rows per provider less the last blank).
+  const sideHeight = Math.max(6, Math.min(16, 3 * range.providers.length))
   const top = wide
-    ? row(el, [col(el, [summary(el, s, range, metric, SIDE)], { width: SIDE }), chart(el, s, range, metric, chartW)], { columnGap: 3 })
-    : col(el, [summary(el, s, range, metric, Math.min(width, SIDE)), blank(el), chart(el, s, range, metric, chartW)])
+    ? row(el, [col(el, [summary(el, s, range, metric, SIDE)], { width: SIDE }), chart(el, s, range, metric, chartW, sideHeight)], { columnGap: 3 })
+    : col(el, [summary(el, s, range, metric, Math.min(width, SIDE)), blank(el), chart(el, s, range, metric, chartW, 10)])
   return col(el, [
     top,
     blank(el),
-    totals(el, range, metric, width),
+    totals(el, range, metric, Math.min(width, 90)),
     blank(el),
     byType(el, range, metric, Math.min(width, 80)),
     blank(el),
