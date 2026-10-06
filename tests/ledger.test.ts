@@ -128,6 +128,23 @@ test('keys switch tab, range, grouping and the selected day', async ($, on) => {
   expect(await ui.find({ type: 'Text', text: /38% left/ })).toBeDefined()
 })
 
+test('a narrow pane stacks its layout and draws on both surfaces', async ($, on) => {
+  stubs(on, [])
+  await $.session.start({ surface: 'terminal', isInteractive: true, cwd: '/work' })
+  await $.command.run({ command: 'ledger', args: '' })
+  await settle()
+  for (const surface of ['terminal', 'desktop'] as const) {
+    const ui = await $.ui.mount({ ...PANE, surface, props: { ...PANE.props, bodyColumns: 60, placement: 'inline' } })
+    expect(await ui.find({ type: 'Text', text: '$42.50' })).toBeDefined()
+    await ui.press({ key: 'tab-tokens' })
+    expect(await ui.find({ type: 'Text', text: 'Daily processed tokens' })).toBeDefined()
+    await ui.press({ key: 'tab-limits' })
+    expect(await ui.find({ type: 'Text', text: /38% left/ })).toBeDefined()
+    await ui.press({ key: 'tab-cost' })
+    await ui.unmount()
+  }
+})
+
 test('a failed scan is reported in the pane', async ($, on) => {
   on('store.get', () => ({ value: undefined }))
   on('store.set', () => ({ value: undefined }))

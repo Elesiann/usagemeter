@@ -84,6 +84,9 @@ The transcript parsing, deduplication and pricing are
 [T3 Code](https://github.com/pingdotgg/t3code)'s, vendored under
 `helper/src/t3/` (MIT); see the README there.
 
+Unlike T3 Code, ledger does not read T3's own data directory, so Antigravity
+sessions that T3 itself launched are not counted.
+
 ### Privacy
 
 Transcripts are read locally and never leave the machine. The helper makes
