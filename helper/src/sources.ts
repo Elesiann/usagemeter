@@ -12,6 +12,14 @@ export interface TranscriptSource {
   readonly dir: string;
 }
 
+/**
+ * The home directory whose agent history is read: `LEDGER_HOME` when set, for
+ * example a Windows profile seen from WSL, else the user's home. Explicit
+ * per-tool variables such as `CLAUDE_CONFIG_DIR` still take precedence.
+ */
+export const historyHome = (env: NodeJS.ProcessEnv): string =>
+  env.LEDGER_HOME?.trim() || env.HOME?.trim() || os.homedir();
+
 const canonical = (dir: string): string => {
   try {
     return realpathSync(dir);
@@ -38,7 +46,7 @@ const listFromEnv = (value: string | undefined): string[] =>
  * Directories are de-duplicated by real path.
  */
 export function transcriptSources(env: NodeJS.ProcessEnv = process.env): TranscriptSource[] {
-  const home = env.HOME?.trim() || os.homedir();
+  const home = historyHome(env);
   const claudeHomes = [env.CLAUDE_CONFIG_DIR?.trim() || path.join(home, ".claude")];
   const codexHomes = [path.join(home, ".codex"), ...listFromEnv(env.CODEX_HOME)];
   const seen = new Set<string>();
@@ -57,7 +65,7 @@ export function transcriptSources(env: NodeJS.ProcessEnv = process.env): Transcr
 
 /** OpenCode data directories (`OPENCODE_DATA_DIR`, else `$XDG_DATA_HOME/opencode`). */
 export function openCodeRoots(env: NodeJS.ProcessEnv = process.env): string[] {
-  const home = env.HOME?.trim() || os.homedir();
+  const home = historyHome(env);
   const dataHome = env.XDG_DATA_HOME?.trim();
   const defaults = [
     path.join(dataHome && path.isAbsolute(dataHome) ? dataHome : path.join(home, ".local", "share"), "opencode"),
@@ -68,7 +76,7 @@ export function openCodeRoots(env: NodeJS.ProcessEnv = process.env): string[] {
 
 /** Antigravity conversation directories (`ANTIGRAVITY_DATA_DIR`, else the known install roots). */
 export function antigravityDirs(env: NodeJS.ProcessEnv = process.env): string[] {
-  const home = env.HOME?.trim() || os.homedir();
+  const home = historyHome(env);
   const configured = listFromEnv(env.ANTIGRAVITY_DATA_DIR);
   const roots = configured.length
     ? configured

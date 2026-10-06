@@ -140,9 +140,10 @@ function makeWindows(nowMs: number, timeZone: string, rates: RateTable): Window[
       resolution: "day",
     });
   }
-  // The last 24 whole hours, the current one included.
+  // Whole hours from the one 24 hours ago through the current one, so every
+  // record of the past 24 hours falls inside: 25 hourly buckets.
   const untilTimeMs = Math.floor(nowMs / HOUR_MS) * HOUR_MS + HOUR_MS;
-  const sinceTimeMs = untilTimeMs - DAY_MS;
+  const sinceTimeMs = untilTimeMs - DAY_MS - HOUR_MS;
   const toDay = dayFormatter(timeZone);
   windows.unshift({
     id: "24h",
@@ -156,7 +157,7 @@ function makeWindows(nowMs: number, timeZone: string, rates: RateTable): Window[
       untilTimeMs,
     }),
     sessions: new Map(),
-    keys: Array.from({ length: 24 }, (_, i) => new Date(sinceTimeMs + i * HOUR_MS).toISOString()),
+    keys: Array.from({ length: 25 }, (_, i) => new Date(sinceTimeMs + i * HOUR_MS).toISOString()),
     sinceDay: toDay(sinceTimeMs),
     untilDay: today,
     resolution: "hour",

@@ -137,6 +137,24 @@ function openCodeGoWindows(response) {
   }
   return windows;
 }
+
+class LimitsError extends Error {
+}
+function describe(error, fallback) {
+  if (error instanceof LimitsError)
+    return error.message;
+  if (error instanceof Error && (error.name === "TimeoutError" || error.name === "AbortError"))
+    return fallback + " (timed out)";
+  let code = error instanceof Error && isRecord(error.cause) && typeof error.cause.code === "string" ? error.cause.code : null;
+  return code && /^[A-Z_]+$/.test(code) ? `${fallback} (${code})` : fallback;
+}
+function parseJson(text, source) {
+  try {
+    return JSON.parse(text);
+  } catch {
+    throw new LimitsError(`${source} returned a response that is not JSON.`);
+  }
+}
 async function management(hub, route, body) {
   let response = await fetch(new URL(`/v0/management/${route}`, hub.url), {
     method: body === void 0 ? "GET" : "POST",
@@ -145,8 +163,8 @@ async function management(hub, route, body) {
     signal: AbortSignal.timeout(HUB_TIMEOUT_MS)
   });
   if (!response.ok)
-    throw Error(`The hub answered HTTP ${response.status}.`);
-  return response.json();
+    throw new LimitsError(`The hub answered HTTP ${response.status}.`);
+  return parseJson(await response.text(), "The hub");
 }
 async function apiCall(hub, account, url, data) {
   let header = account.provider === "antigravity" ? { Authorization: "Bearer $TOKEN$", "Content-Type": "application/json", Accept: "application/json", "User-Agent": "antigravity" } : account.provider === "codex" ? {
@@ -163,10 +181,10 @@ async function apiCall(hub, account, url, data) {
     ...data === void 0 ? {} : { data: JSON.stringify(data) }
   });
   if (!isRecord(raw) || typeof raw.status_code !== "number")
-    throw Error("The hub returned an unexpected answer.");
+    throw new LimitsError("The hub returned an unexpected answer.");
   if (raw.status_code < 200 || raw.status_code >= 300)
-    throw Error(`The provider refused the hub request (HTTP ${raw.status_code}).`);
-  return typeof raw.body === "string" ? JSON.parse(raw.body) : raw.body;
+    throw new LimitsError(`The provider refused the hub request (HTTP ${raw.status_code}).`);
+  return typeof raw.body === "string" ? parseJson(raw.body, "The provider") : raw.body;
 }
 var planLabel = (plan) => typeof plan === "string" && plan ? plan.charAt(0).toUpperCase() + plan.slice(1) : void 0;
 async function readAntigravity(hub, account) {
@@ -202,7 +220,7 @@ async function readHubAccount(hub, account, nowMs) {
     }), plan = planLabel(isRecord(usage) ? usage.plan_type : void 0) ?? planLabel(account.id_token?.chatgpt_plan_type);
     return { provider, label, ...plan ? { plan } : {}, windows: codexWindows(usage), ...credits === void 0 ? {} : { resetCredits: credits } };
   } catch (error) {
-    return { provider, label, windows: [], error: error instanceof Error ? error.message : "The hub could not read this account." };
+    return { provider, label, windows: [], error: describe(error, "The hub could not read this account.") };
   }
 }
 async function readHub(hub, nowMs) {
@@ -210,13 +228,13 @@ async function readHub(hub, nowMs) {
   try {
     listed = await management(hub, "auth-files");
   } catch (error) {
-    return { accounts: [], status: { status: "error", message: error instanceof Error ? error.message : "The hub could not list accounts." } };
+    return { accounts: [], status: { status: "error", message: describe(error, "The hub could not be reached") } };
   }
   let usable = (isRecord(listed) && Array.isArray(listed.files) ? listed.files : []).filter((file) => isRecord(file) && !file.disabled && ["codex", "claude", "antigravity"].includes(file.provider));
   return { accounts: await Promise.all(usable.map((file) => readHubAccount(hub, file, nowMs))), status: { status: "ok" } };
 }
 async function readOpenCodeGo(env) {
-  let dataHome = env.XDG_DATA_HOME || path.join(os.homedir(), ".local", "share"), key = env.OPENCODE_API_KEY?.trim();
+  let dataHome = env.XDG_DATA_HOME || path.join(env.HOME?.trim() || os.homedir(), ".local", "share"), key = env.OPENCODE_API_KEY?.trim();
   try {
     let auth = JSON.parse(await readFile(path.join(dataHome, "opencode", "auth.json"), "utf8")), entry = isRecord(auth) ? auth["opencode-go"] : void 0;
     if (isRecord(entry) && entry.type === "api" && typeof entry.key === "string" && entry.key.trim())
@@ -232,10 +250,10 @@ async function readOpenCodeGo(env) {
     if (response.status === 403)
       return { status: { status: "unsupported", message: "This key has no OpenCode Go plan." } };
     if (!response.ok)
-      throw Error(`OpenCode answered HTTP ${response.status}.`);
-    return { account: { provider: "opencode-go", label: "OpenCode Go", windows: openCodeGoWindows(await response.json()) }, status: { status: "ok" } };
+      throw new LimitsError(`OpenCode answered HTTP ${response.status}.`);
+    return { account: { provider: "opencode-go", label: "OpenCode Go", windows: openCodeGoWindows(parseJson(await response.text(), "OpenCode")) }, status: { status: "ok" } };
   } catch (error) {
-    return { status: { status: "error", message: error instanceof Error ? error.message : "OpenCode Go could not be read." } };
+    return { status: { status: "error", message: describe(error, "OpenCode Go could not be read") } };
   }
 }
 async function readLimits(options) {
@@ -2748,7 +2766,7 @@ function dedupeWithinFile(records, seen = /* @__PURE__ */ new Set) {
 import { existsSync, realpathSync } from "node:fs";
 import * as os2 from "node:os";
 import * as path3 from "node:path";
-var canonical = (dir) => {
+var historyHome = (env) => env.LEDGER_HOME?.trim() || env.HOME?.trim() || os2.homedir(), canonical = (dir) => {
   try {
     return realpathSync(dir);
   } catch {
@@ -2756,7 +2774,7 @@ var canonical = (dir) => {
   }
 }, expandHome = (value, home) => value === "~" ? home : value.startsWith("~/") ? path3.join(home, value.slice(2)) : value, listFromEnv = (value) => (value ?? "").split(",").map((item) => item.trim()).filter(Boolean);
 function transcriptSources(env = process.env) {
-  let home = env.HOME?.trim() || os2.homedir(), claudeHomes = [env.CLAUDE_CONFIG_DIR?.trim() || path3.join(home, ".claude")], codexHomes = [path3.join(home, ".codex"), ...listFromEnv(env.CODEX_HOME)], seen = /* @__PURE__ */ new Set, sources = [], add = (provider, dir) => {
+  let home = historyHome(env), claudeHomes = [env.CLAUDE_CONFIG_DIR?.trim() || path3.join(home, ".claude")], codexHomes = [path3.join(home, ".codex"), ...listFromEnv(env.CODEX_HOME)], seen = /* @__PURE__ */ new Set, sources = [], add = (provider, dir) => {
     let resolved = canonical(expandHome(dir, home)), key = provider + "\x00" + resolved;
     if (seen.has(key))
       return;
@@ -2769,13 +2787,13 @@ function transcriptSources(env = process.env) {
   return sources;
 }
 function openCodeRoots(env = process.env) {
-  let home = env.HOME?.trim() || os2.homedir(), dataHome = env.XDG_DATA_HOME?.trim(), defaults = [
+  let home = historyHome(env), dataHome = env.XDG_DATA_HOME?.trim(), defaults = [
     path3.join(dataHome && path3.isAbsolute(dataHome) ? dataHome : path3.join(home, ".local", "share"), "opencode")
   ], roots = listFromEnv(env.OPENCODE_DATA_DIR);
   return [...new Set((roots.length ? roots : defaults).map((root) => canonical(expandHome(root, home))))];
 }
 function antigravityDirs(env = process.env) {
-  let home = env.HOME?.trim() || os2.homedir(), configured = listFromEnv(env.ANTIGRAVITY_DATA_DIR), roots = configured.length ? configured : [
+  let home = historyHome(env), configured = listFromEnv(env.ANTIGRAVITY_DATA_DIR), roots = configured.length ? configured : [
     ...["antigravity", "antigravity-cli", "antigravity-ide", "antigravity-backup"].map((name) => path3.join(home, ".gemini", name)),
     path3.join(home, ".config", "antigravity")
   ], dirs = /* @__PURE__ */ new Set;
@@ -2815,7 +2833,7 @@ function makeWindows(nowMs, timeZone, rates) {
       resolution: "day"
     });
   }
-  let untilTimeMs = Math.floor(nowMs / HOUR_MS2) * HOUR_MS2 + HOUR_MS2, sinceTimeMs = untilTimeMs - DAY_MS, toDay = dayFormatter(timeZone);
+  let untilTimeMs = Math.floor(nowMs / HOUR_MS2) * HOUR_MS2 + HOUR_MS2, sinceTimeMs = untilTimeMs - DAY_MS - HOUR_MS2, toDay = dayFormatter(timeZone);
   return windows.unshift({
     id: "24h",
     aggregator: new UsageAggregator({
@@ -2828,7 +2846,7 @@ function makeWindows(nowMs, timeZone, rates) {
       untilTimeMs
     }),
     sessions: /* @__PURE__ */ new Map,
-    keys: Array.from({ length: 24 }, (_, i) => new Date(sinceTimeMs + i * HOUR_MS2).toISOString()),
+    keys: Array.from({ length: 25 }, (_, i) => new Date(sinceTimeMs + i * HOUR_MS2).toISOString()),
     sinceDay: toDay(sinceTimeMs),
     untilDay: today,
     resolution: "hour"

@@ -202,3 +202,52 @@ test("Antigravity summary buckets become session and weekly windows per family",
     [["Session · Gemini", 0, 300], ["Session · Claude + GPT", 100, 300], ["Weekly · Claude + GPT", 50, 10080]],
   );
 });
+
+test("a malformed upstream body never reaches an error message", async () => {
+  const server = createServer((req, res) => {
+    let raw = "";
+    req.on("data", (chunk) => (raw += chunk));
+    req.on("end", () => {
+      if (req.url === "/v0/management/auth-files") return res.end(JSON.stringify({ files: [{ id: "b", auth_index: 1, provider: "claude", email: "k@example.com" }] }));
+      if (req.url === "/v0/management/api-call") return res.end(JSON.stringify({ status_code: 200, body: "sk-do-not-leak {not json" }));
+      res.statusCode = 404;
+      res.end();
+    });
+  });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  try {
+    const { port } = server.address() as { port: number };
+    const out = await readLimits({ nowMs: Date.now(), hubUrl: `http://127.0.0.1:${port}`, hubKey: "k", openCodeGo: false, env: {} });
+    assert.equal(out.accounts[0]!.error, "The provider returned a response that is not JSON.");
+    assert.ok(!JSON.stringify(out).includes("do-not-leak"));
+  } finally {
+    server.close();
+  }
+});
+
+test("an unreachable hub is reported with the network error code only", async () => {
+  const out = await readLimits({ nowMs: Date.now(), hubUrl: "http://127.0.0.1:9", hubKey: "k", openCodeGo: false, env: {} });
+  assert.equal(out.hub.status, "error");
+  assert.match(out.hub.message ?? "", /^The hub could not be reached( \([A-Z_]+\))?$/);
+});
+
+test("the 24h range covers every record of the past 24 hours", async () => {
+  const home = await mkdtemp(path.join(os.tmpdir(), "ledger-test-"));
+  try {
+    const projects = path.join(home, ".claude", "projects", "p");
+    await mkdir(projects, { recursive: true });
+    // At 12:01, yesterday's 12:30 record is 23h31m old and must count; 11:30 is older than a day.
+    await writeFile(path.join(projects, "a.jsonl"), claudeLine(1, "2026-10-04T12:30:00Z", 7) + claudeLine(2, "2026-10-04T11:30:00Z", 5));
+    const rates = createOverrideRateTable({});
+    const result = await scan({ nowMs: Date.parse("2026-10-05T12:01:00Z"), timeZone: "UTC", rates, cacheDir: path.join(home, "cache"), env: { HOME: home } });
+    assert.equal(result.ranges["24h"].total.output, 7);
+    assert.equal(result.ranges["24h"].points.length, 25);
+  } finally {
+    await rm(home, { recursive: true, force: true });
+  }
+});
+
+test("LEDGER_HOME points the scan at another home", () => {
+  const sources = transcriptSources({ LEDGER_HOME: "/tmp/elsewhere", HOME: "/tmp/mine" });
+  assert.deepEqual(sources.map((s) => s.dir), ["/tmp/elsewhere/.claude/projects", "/tmp/elsewhere/.codex/sessions"]);
+});

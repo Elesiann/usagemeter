@@ -55,11 +55,14 @@ export function fitColumns(columns, slots) {
  * `columns`: `{ total, label, parts: [{ key, value, color }] }`, oldest first.
  */
 export function barChart({ columns, width, height, format = String, showValues = true }) {
-  const max = Math.max(...columns.map((c) => c.total), 0)
+  // Columns merge to fit before the scale is known, so size the axis for the
+  // largest label merging could produce, then scale to the merged columns.
+  const widestAxis = format(columns.reduce((sum, c) => sum + c.total, 0)).length + 1
+  const merged = fitColumns(columns, Math.max(4, width - widestAxis - 1))
+  const max = Math.max(...merged.map((c) => c.total), 0)
   const axisLabels = [format(max), format(max / 2), format(0)]
   const axisW = Math.max(...axisLabels.map((l) => l.length)) + 1
   const plotW = Math.max(4, width - axisW - 1)
-  const merged = fitColumns(columns, plotW)
   const slot = Math.max(1, Math.floor(plotW / merged.length))
   const barW = slot >= 3 ? slot - 1 : slot
   const heights = merged.map((c) => (max > 0 ? Math.round((c.total / max) * height * 8) : 0))

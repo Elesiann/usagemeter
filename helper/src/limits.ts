@@ -196,6 +196,29 @@ export function openCodeGoWindows(response: unknown): LimitWindow[] {
   return windows;
 }
 
+/** An error whose message was written here and is safe to show; anything else is described generically. */
+class LimitsError extends Error {}
+
+/**
+ * The message to show for a failed read. Only messages written here pass
+ * through: a JSON parser's or another library's message can quote the body it
+ * was reading, and upstream bodies can carry account details.
+ */
+function describe(error: unknown, fallback: string): string {
+  if (error instanceof LimitsError) return error.message;
+  if (error instanceof Error && (error.name === "TimeoutError" || error.name === "AbortError")) return fallback + " (timed out)";
+  const code = error instanceof Error && isRecord(error.cause) && typeof error.cause.code === "string" ? error.cause.code : null;
+  return code && /^[A-Z_]+$/.test(code) ? `${fallback} (${code})` : fallback;
+}
+
+function parseJson(text: string, source: string): unknown {
+  try {
+    return JSON.parse(text);
+  } catch {
+    throw new LimitsError(`${source} returned a response that is not JSON.`);
+  }
+}
+
 interface HubConfig {
   readonly url: string;
   readonly key: string;
@@ -208,8 +231,8 @@ async function management(hub: HubConfig, route: string, body?: unknown): Promis
     ...(body === undefined ? {} : { body: JSON.stringify(body) }),
     signal: AbortSignal.timeout(HUB_TIMEOUT_MS),
   });
-  if (!response.ok) throw new Error(`The hub answered HTTP ${response.status}.`);
-  return response.json();
+  if (!response.ok) throw new LimitsError(`The hub answered HTTP ${response.status}.`);
+  return parseJson(await response.text(), "The hub");
 }
 
 interface AuthFile {
@@ -242,10 +265,10 @@ async function apiCall(hub: HubConfig, account: AuthFile, url: string, data?: un
     header,
     ...(data === undefined ? {} : { data: JSON.stringify(data) }),
   });
-  if (!isRecord(raw) || typeof raw.status_code !== "number") throw new Error("The hub returned an unexpected answer.");
+  if (!isRecord(raw) || typeof raw.status_code !== "number") throw new LimitsError("The hub returned an unexpected answer.");
   // The upstream body is never surfaced: it can carry account details.
-  if (raw.status_code < 200 || raw.status_code >= 300) throw new Error(`The provider refused the hub request (HTTP ${raw.status_code}).`);
-  return typeof raw.body === "string" ? JSON.parse(raw.body) : raw.body;
+  if (raw.status_code < 200 || raw.status_code >= 300) throw new LimitsError(`The provider refused the hub request (HTTP ${raw.status_code}).`);
+  return typeof raw.body === "string" ? parseJson(raw.body, "The provider") : raw.body;
 }
 
 const planLabel = (plan: unknown): string | undefined =>
@@ -296,7 +319,7 @@ async function readHubAccount(hub: HubConfig, account: AuthFile, nowMs: number):
     const plan = planLabel(isRecord(usage) ? usage.plan_type : undefined) ?? planLabel(account.id_token?.chatgpt_plan_type);
     return { provider, label, ...(plan ? { plan } : {}), windows: codexWindows(usage), ...(credits === undefined ? {} : { resetCredits: credits }) };
   } catch (error) {
-    return { provider, label, windows: [], error: error instanceof Error ? error.message : "The hub could not read this account." };
+    return { provider, label, windows: [], error: describe(error, "The hub could not read this account.") };
   }
 }
 
@@ -305,7 +328,7 @@ async function readHub(hub: HubConfig, nowMs: number): Promise<{ accounts: Limit
   try {
     listed = await management(hub, "auth-files");
   } catch (error) {
-    return { accounts: [], status: { status: "error", message: error instanceof Error ? error.message : "The hub could not list accounts." } };
+    return { accounts: [], status: { status: "error", message: describe(error, "The hub could not be reached") } };
   }
   const files = isRecord(listed) && Array.isArray(listed.files) ? (listed.files as AuthFile[]) : [];
   const usable = files.filter((file) => isRecord(file) && !file.disabled && ["codex", "claude", "antigravity"].includes(file.provider));
@@ -314,7 +337,7 @@ async function readHub(hub: HubConfig, nowMs: number): Promise<{ accounts: Limit
 }
 
 async function readOpenCodeGo(env: NodeJS.ProcessEnv): Promise<{ account?: LimitAccount; status: LimitsOutput["openCodeGo"] }> {
-  const dataHome = env.XDG_DATA_HOME || path.join(os.homedir(), ".local", "share");
+  const dataHome = env.XDG_DATA_HOME || path.join(env.HOME?.trim() || os.homedir(), ".local", "share");
   let key = env.OPENCODE_API_KEY?.trim();
   try {
     const auth: unknown = JSON.parse(await readFile(path.join(dataHome, "opencode", "auth.json"), "utf8"));
@@ -331,10 +354,11 @@ async function readOpenCodeGo(env: NodeJS.ProcessEnv): Promise<{ account?: Limit
     });
     // A valid Zen key can exist without a Go subscription.
     if (response.status === 403) return { status: { status: "unsupported", message: "This key has no OpenCode Go plan." } };
-    if (!response.ok) throw new Error(`OpenCode answered HTTP ${response.status}.`);
-    return { account: { provider: "opencode-go", label: "OpenCode Go", windows: openCodeGoWindows(await response.json()) }, status: { status: "ok" } };
+    if (!response.ok) throw new LimitsError(`OpenCode answered HTTP ${response.status}.`);
+    const windows = openCodeGoWindows(parseJson(await response.text(), "OpenCode"));
+    return { account: { provider: "opencode-go", label: "OpenCode Go", windows }, status: { status: "ok" } };
   } catch (error) {
-    return { status: { status: "error", message: error instanceof Error ? error.message : "OpenCode Go could not be read." } };
+    return { status: { status: "error", message: describe(error, "OpenCode Go could not be read") } };
   }
 }
 

@@ -124,14 +124,16 @@ function compact(n) {
 
 function totals(el, range, metric, width) {
   const t = range.total
+  // Five cells share the width; a narrow pane gets the short labels.
+  const cellW = Math.max(8, Math.floor(width / 5))
+  const short = cellW < 17
   const cells = [
-    ['Processed tokens', tokens(t.tokens)],
-    ['Cached input', tokens(t.cachedInput)],
-    ['Uncached input', tokens(t.uncachedInput)],
+    [short ? 'Processed' : 'Processed tokens', tokens(t.tokens)],
+    [short ? 'Cached' : 'Cached input', tokens(t.cachedInput)],
+    [short ? 'Uncached' : 'Uncached input', tokens(t.uncachedInput)],
     ['Output', tokens(t.output)],
-    metric === 'cost' ? ['Cache savings', money(t.savingsUsd)] : ['Cache write', tokens(t.cacheWrite)],
+    metric === 'cost' ? [short ? 'Savings' : 'Cache savings', money(t.savingsUsd)] : [short ? 'Writes' : 'Cache write', tokens(t.cacheWrite)],
   ]
-  const cellW = Math.max(14, Math.floor(width / cells.length))
   return col(el, [
     text(el, 'Totals', { bold: true }),
     row(el, cells.map(([k]) => text(el, k.padEnd(cellW).slice(0, cellW), { dimColor: true }))),
@@ -254,8 +256,12 @@ function limitsTab(el, s, width) {
   if (!byProvider.has('claude') && s.claudeNative?.length) {
     byProvider.set('claude', [{ provider: 'claude', label: 'this session', windows: s.claudeNative }])
   }
-  // Label 20, percent 9, pace 3, reset text up to 28: the meter takes what is left.
-  const barW = Math.max(8, Math.min(60, width - 62))
+  // Label, percent (9), pace (3) and reset text share the row with the meter.
+  // A narrow pane gets a shorter label and only the time left before reset.
+  const narrow = width < 90
+  const labelW = narrow ? 14 : 24
+  const resetW = narrow ? 11 : 28
+  const barW = Math.max(4, Math.min(60, width - (labelW + 12 + resetW)))
   for (const [provider, list] of byProvider) {
     groups.push(text(el, providerLabel(provider), { bold: true, color: providerColor(provider) }))
     for (const account of list) {
@@ -264,13 +270,14 @@ function limitsTab(el, s, width) {
       if (account.error) groups.push(text(el, '  ' + account.error, { color: 'red' }))
       for (const w of account.windows) {
         const left = Math.max(0, 100 - w.usedPercent)
-        const reset = w.resetsAt ? '↻ ' + duration(Date.parse(w.resetsAt) - s.nowMs) + ' · ' + clockLabel(w.resetsAt, s.nowMs, s.timeZone) : ''
+        const until = w.resetsAt ? '↻ ' + duration(Date.parse(w.resetsAt) - s.nowMs) : ''
+        const reset = w.resetsAt && !narrow ? until + ' · ' + clockLabel(w.resetsAt, s.nowMs, s.timeZone) : until
         groups.push(row(el, [
-          text(el, '  ' + w.label.padEnd(18).slice(0, 18)),
+          text(el, '  ' + w.label.padEnd(labelW - 2).slice(0, labelW - 2)),
           text(el, (Math.round(left) + '% left').padStart(9), { bold: true }),
           text(el, (pace(w, s.nowMs) || '  ').padEnd(3), { dimColor: true }),
           ...lines(el, [meter(left / 100, barW, providerColor(provider))], 'meter-' + w.id),
-          text(el, ('  ' + reset).padEnd(28).slice(0, 28), { dimColor: true }),
+          text(el, ('  ' + reset).padEnd(resetW).slice(0, resetW), { dimColor: true }),
         ]))
       }
     }

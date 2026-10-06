@@ -158,6 +158,10 @@ test('charts fit the width they are given', () => {
   const columns = Array.from({ length: 90 }, (_, i) => ({ total: i, label: 'd' + i, parts: [{ key: 'claude', value: i, color: '#d97757' }] }))
   const { rows, merged } = barChart({ columns, width: 60, height: 6 })
   expect(merged.length <= 60).toBe(true)
+  // The axis is scaled to the merged columns: the tallest merged bar fills the top row.
+  const merged40 = barChart({ columns: Array.from({ length: 90 }, () => ({ total: 1, label: 'd', parts: [{ key: 'k', value: 1, color: '#fff' }] })), width: 40, height: 4 })
+  expect(merged40.merged[0].total > 1).toBe(true)
+  expect(merged40.rows[0][0].text.trim()).toBe(merged40.merged[0].total + ' ┤')
   for (const row of rows) expect(row.reduce((n: number, seg: { text: string }) => n + seg.text.length, 0) <= 60).toBe(true)
   const bar = splitBar([{ value: 1, color: 'a' }, { value: 1000, color: 'b' }, { value: 0, color: 'c' }], 40)
   expect(bar.reduce((n: number, seg: { text: string }) => n + seg.text.length, 0)).toBe(40)

@@ -21,6 +21,8 @@ let group = 'model'
 let usage = null
 let usageError = null
 let scanning = false
+/** A forced refresh that arrived during a scan, run once that scan ends. */
+let rescanQueued = false
 let limits = null
 let limitsError = null
 let limitsBusy = false
@@ -53,11 +55,28 @@ function parseOutput(stdout) {
   }
 }
 
-const failure = (result, doc) =>
-  doc?.error || result.stderr.trim().split('\n').at(-1) || 'the helper exited with code ' + result.exitCode
+const NODE_HINT = 'ledger needs Node.js 22.5 or later on PATH'
 
-async function refreshUsage($) {
-  if (scanning) return
+const failure = (result, doc) => {
+  if (doc?.error) return doc.error
+  const stderr = result.stderr.trim()
+  // node:sqlite arrived in Node 22.5; an older node cannot load the helper.
+  if (/node:sqlite|ERR_UNKNOWN_BUILTIN_MODULE|SyntaxError/.test(stderr)) return NODE_HINT + ' (' + stderr.split('\n').at(-1) + ')'
+  return stderr.split('\n').at(-1) || 'the helper exited with code ' + result.exitCode
+}
+
+/** The message for a helper that could not run at all, such as node missing from PATH. */
+function startFailure(error) {
+  const message = error instanceof Error ? error.message : String(error)
+  return /ENOENT|not found|no such file/i.test(message) ? NODE_HINT + '.' : message
+}
+
+async function refreshUsage($, force) {
+  if (scanning) {
+    // The running scan may have started before the newest transcript lines.
+    if (force) rescanQueued = true
+    return
+  }
   scanning = true
   usageError = null
   $.ui.invalidate('ui.render')
@@ -70,10 +89,14 @@ async function refreshUsage($) {
     usage = doc
     await $.store.set('usage', doc)
   } catch (error) {
-    usageError = error instanceof Error ? error.message : String(error)
+    usageError = startFailure(error)
   } finally {
     scanning = false
     $.ui.invalidate('ui.render')
+  }
+  if (rescanQueued) {
+    rescanQueued = false
+    await refreshUsage($, false)
   }
 }
 
@@ -99,7 +122,7 @@ async function refreshLimits($) {
     limits = doc
     await $.store.set('limits', doc)
   } catch (error) {
-    limitsError = error instanceof Error ? error.message : String(error)
+    limitsError = startFailure(error)
   } finally {
     limitsBusy = false
     $.ui.invalidate('ui.render')
@@ -112,7 +135,7 @@ async function refreshLimits($) {
  * hub settings.
  */
 function refresh($, force) {
-  if (force || !usage || Date.now() - Date.parse(usage.readAt) > STALE_MS) refreshUsage($)
+  if (force || !usage || Date.now() - Date.parse(usage.readAt) > STALE_MS) refreshUsage($, force)
   refreshLimits($)
 }
 
