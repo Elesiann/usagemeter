@@ -25,6 +25,7 @@ claude --plugin-dir .      # loads your checkout; the mod reloads on save
 | `helper/dist/usagemeter-helper.mjs` | The bundled helper that ships with the plugin |
 | `tests/` | Mod tests, run by `claude plugin test` |
 | `helper/test/` | Helper tests, run by `node --test` |
+| `scripts/demo/` | How the README images are made from demo data |
 
 ## Before you open a pull request
 

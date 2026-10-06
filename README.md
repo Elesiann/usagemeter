@@ -16,10 +16,10 @@ hub it also shows the session and weekly limits of every account the hub
 holds.
 
 <p align="center">
-  <img src="docs/images/cost.png" width="900" alt="The Cost tab: total cost for the past seven days, cost per agent with its share, a stacked daily cost chart, token totals, cost by token type and a breakdown by model">
+  <img src="docs/images/demo.gif" width="900" alt="The pane cycling through its tabs: Cost for the past seven days, Tokens, Limits for Codex, Claude and Antigravity accounts, then Cost over 30 days, 90 days and the past 24 hours">
 </p>
 
-<sub>Screenshots use generated demo data.</sub>
+<sub>Screenshots and the animation use generated demo data.</sub>
 
 ## Contents
 
@@ -49,6 +49,10 @@ holds.
   reads only the lines written since the last one.
 - **Same pane in the terminal and the Desktop app's Code tab**: the charts are
   plain text.
+
+<p align="center">
+  <img src="docs/images/cost.png" width="900" alt="The Cost tab: total cost for the past seven days, cost per agent with its share, a stacked daily cost chart, token totals, cost by token type and a breakdown by model">
+</p>
 
 <p align="center">
   <img src="docs/images/tokens.png" width="900" alt="The Tokens tab: processed tokens per agent, a stacked daily token chart, totals and tokens by type">
