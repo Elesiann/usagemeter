@@ -1,0 +1,28 @@
+{
+  "name": "ledger",
+  "version": "0.1.0",
+  "description": "A /ledger pane with cost, tokens and plan limits across Claude Code, Codex, OpenCode and Antigravity, read from local history and a CLIProxyAPI hub.",
+  "author": { "name": "Elesiann" },
+  "license": "MIT",
+  "keywords": ["claude-code", "mods", "usage", "cost", "limits", "cliproxyapi"],
+  "userConfig": {
+    "hubUrl": {
+      "type": "string",
+      "title": "CLIProxyAPI URL",
+      "description": "Base URL of the CLIProxyAPI hub that holds your Codex and Claude accounts",
+      "default": "http://localhost:8317"
+    },
+    "hubKey": {
+      "type": "string",
+      "title": "CLIProxyAPI management key",
+      "description": "Management key of the hub, used to read each account's plan limits. Leave empty to skip the hub.",
+      "sensitive": true
+    },
+    "openCodeGo": {
+      "type": "boolean",
+      "title": "Read OpenCode Go limits",
+      "description": "Read the OpenCode Go key from OpenCode's auth.json (or OPENCODE_API_KEY) to show Go plan limits",
+      "default": false
+    }
+  }
+}

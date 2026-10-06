@@ -1,0 +1,249 @@
+// Plan limits from a CLIProxyAPI hub (Codex and Claude accounts) and from
+// OpenCode Go, normalized the way T3 Code normalizes them
+// (apps/server/src/usage/cliproxyApi.ts and provider/Layers/*UsageLimits.ts).
+import { readFile } from "node:fs/promises";
+import * as os from "node:os";
+import * as path from "node:path";
+
+export type WindowKind = "session" | "weekly" | "monthly" | "other";
+
+export interface LimitWindow {
+  readonly id: string;
+  readonly label: string;
+  readonly kind: WindowKind;
+  readonly usedPercent: number;
+  readonly resetsAt?: string;
+  readonly windowMins?: number;
+}
+
+export interface LimitAccount {
+  readonly provider: "codex" | "claude" | "opencode-go";
+  readonly label: string;
+  readonly plan?: string;
+  readonly windows: LimitWindow[];
+  /** Codex rate-limit reset credits that are available now. */
+  readonly resetCredits?: number;
+  readonly error?: string;
+}
+
+export interface LimitsOutput {
+  readonly accounts: LimitAccount[];
+  readonly hub: { readonly status: "ok" | "off" | "error"; readonly message?: string };
+  readonly openCodeGo: { readonly status: "ok" | "off" | "unsupported" | "error"; readonly message?: string };
+}
+
+const SESSION_MINS = 5 * 60;
+const WEEK_MINS = 7 * 24 * 60;
+const MONTH_MINS = 30 * 24 * 60;
+const HUB_TIMEOUT_MS = 15_000;
+const CODEX_BASE = "https://chatgpt.com/backend-api/wham";
+
+const clamp = (value: number): number => Math.min(100, Math.max(0, Number.isFinite(value) ? value : 0));
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === "object" && value !== null && !Array.isArray(value);
+const kindFor = (mins: number): WindowKind => (mins >= MONTH_MINS ? "monthly" : mins >= WEEK_MINS ? "weekly" : "session");
+const labelFor = (kind: WindowKind): string =>
+  kind === "session" ? "Session" : kind === "weekly" ? "Weekly" : kind === "monthly" ? "Monthly" : "Other";
+const isoFromEpochSeconds = (value: unknown): string | undefined =>
+  typeof value === "number" && Number.isFinite(value) && value > 0 ? new Date(value * 1000).toISOString() : undefined;
+const isoFromString = (value: unknown): string | undefined =>
+  typeof value === "string" && !Number.isNaN(Date.parse(value)) ? new Date(value).toISOString() : undefined;
+
+/** Codex `usage` → windows. `primary`/`secondary` are positions; durations decide the kind. */
+export function codexWindows(usage: unknown): LimitWindow[] {
+  if (!isRecord(usage) || !isRecord(usage.rate_limit)) return [];
+  const monthlyPlan = usage.plan_type === "free" || usage.plan_type === "go";
+  const windows: LimitWindow[] = [];
+  for (const [id, fallbackMins] of [["primary", monthlyPlan ? MONTH_MINS : SESSION_MINS], ["secondary", WEEK_MINS]] as const) {
+    const raw = usage.rate_limit[`${id}_window`];
+    if (!isRecord(raw) || typeof raw.used_percent !== "number") continue;
+    const mins = typeof raw.limit_window_seconds === "number" ? raw.limit_window_seconds / 60 : fallbackMins;
+    const kind = kindFor(mins);
+    const resetsAt = isoFromEpochSeconds(raw.reset_at);
+    windows.push({ id, label: labelFor(kind), kind, usedPercent: clamp(raw.used_percent), windowMins: mins, ...(resetsAt ? { resetsAt } : {}) });
+  }
+  return windows;
+}
+
+/** Claude OAuth `usage` → session, weekly and model-scoped weekly windows. */
+export function claudeWindows(usage: unknown): LimitWindow[] {
+  if (!isRecord(usage)) return [];
+  const windows: LimitWindow[] = [];
+  for (const [id, kind, mins] of [["five_hour", "session", SESSION_MINS], ["seven_day", "weekly", WEEK_MINS]] as const) {
+    const raw = usage[id];
+    if (!isRecord(raw) || typeof raw.utilization !== "number") continue;
+    const resetsAt = isoFromString(raw.resets_at);
+    windows.push({ id, label: labelFor(kind), kind, usedPercent: clamp(raw.utilization), windowMins: mins, ...(resetsAt ? { resetsAt } : {}) });
+  }
+  for (const limit of Array.isArray(usage.limits) ? usage.limits : []) {
+    if (!isRecord(limit) || limit.kind !== "weekly_scoped" || typeof limit.percent !== "number") continue;
+    const model = isRecord(limit.scope) && isRecord(limit.scope.model) ? limit.scope.model.display_name : undefined;
+    if (typeof model !== "string" || !model.trim()) continue;
+    const resetsAt = isoFromString(limit.resets_at);
+    windows.push({
+      id: "seven_day_" + model.trim().toLowerCase().replace(/[^a-z0-9]+/g, "_"),
+      label: "Weekly · " + model.trim(),
+      kind: "weekly",
+      usedPercent: clamp(limit.percent),
+      windowMins: WEEK_MINS,
+      ...(resetsAt ? { resetsAt } : {}),
+    });
+  }
+  return windows;
+}
+
+/** Codex reset credits that can be used now. */
+export function availableCredits(response: unknown, nowMs: number): number {
+  if (!isRecord(response) || !Array.isArray(response.credits)) return 0;
+  return response.credits.filter(
+    (credit) =>
+      isRecord(credit) &&
+      credit.reset_type === "codex_rate_limits" &&
+      credit.status === "available" &&
+      typeof credit.expires_at === "string" &&
+      Date.parse(credit.expires_at) > nowMs,
+  ).length;
+}
+
+/** OpenCode Go `usage` → rolling, weekly and monthly windows. */
+export function openCodeGoWindows(response: unknown): LimitWindow[] {
+  if (!isRecord(response) || !isRecord(response.usage)) return [];
+  const windows: LimitWindow[] = [];
+  for (const [key, kind, mins] of [["rolling", "session", SESSION_MINS], ["weekly", "weekly", WEEK_MINS], ["monthly", "monthly", undefined]] as const) {
+    const raw = response.usage[key];
+    if (!isRecord(raw) || typeof raw.percent !== "number") continue;
+    const resetsAt = isoFromString(raw.resetsAt);
+    windows.push({ id: "go_" + key, label: "Go · " + labelFor(kind), kind, usedPercent: clamp(raw.percent), ...(mins ? { windowMins: mins } : {}), ...(resetsAt ? { resetsAt } : {}) });
+  }
+  return windows;
+}
+
+interface HubConfig {
+  readonly url: string;
+  readonly key: string;
+}
+
+async function management(hub: HubConfig, route: string, body?: unknown): Promise<unknown> {
+  const response = await fetch(new URL(`/v0/management/${route}`, hub.url), {
+    method: body === undefined ? "GET" : "POST",
+    headers: { Authorization: `Bearer ${hub.key}`, ...(body === undefined ? {} : { "Content-Type": "application/json" }) },
+    ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+    signal: AbortSignal.timeout(HUB_TIMEOUT_MS),
+  });
+  if (!response.ok) throw new Error(`The hub answered HTTP ${response.status}.`);
+  return response.json();
+}
+
+interface AuthFile {
+  readonly auth_index: unknown;
+  readonly provider: string;
+  readonly email?: string;
+  readonly disabled?: boolean;
+  readonly id_token?: { readonly chatgpt_account_id?: string; readonly chatgpt_plan_type?: string };
+}
+
+/** One upstream read through the hub's `api-call`, which substitutes the account's token for `$TOKEN$`. */
+async function apiCall(hub: HubConfig, account: AuthFile, url: string): Promise<unknown> {
+  const header =
+    account.provider === "codex"
+      ? {
+          Authorization: "Bearer $TOKEN$",
+          "Content-Type": "application/json",
+          "OpenAI-Beta": "codex-1",
+          Originator: "Codex Desktop",
+          ...(account.id_token?.chatgpt_account_id ? { "Chatgpt-Account-Id": account.id_token.chatgpt_account_id } : {}),
+        }
+      : { Authorization: "Bearer $TOKEN$", "anthropic-beta": "oauth-2025-04-20" };
+  const raw = await management(hub, "api-call", { auth_index: account.auth_index, method: "GET", url, header });
+  if (!isRecord(raw) || typeof raw.status_code !== "number") throw new Error("The hub returned an unexpected answer.");
+  // The upstream body is never surfaced: it can carry account details.
+  if (raw.status_code < 200 || raw.status_code >= 300) throw new Error(`The provider refused the hub request (HTTP ${raw.status_code}).`);
+  return typeof raw.body === "string" ? JSON.parse(raw.body) : raw.body;
+}
+
+const planLabel = (plan: unknown): string | undefined =>
+  typeof plan === "string" && plan ? plan.charAt(0).toUpperCase() + plan.slice(1) : undefined;
+
+async function readHubAccount(hub: HubConfig, account: AuthFile, nowMs: number): Promise<LimitAccount> {
+  const provider = account.provider === "codex" ? "codex" : "claude";
+  const label = account.email || (provider === "codex" ? "Codex account" : "Claude account");
+  try {
+    if (provider === "claude") {
+      const usage = await apiCall(hub, account, "https://api.anthropic.com/api/oauth/usage");
+      return { provider, label, windows: claudeWindows(usage) };
+    }
+    const usage = await apiCall(hub, account, `${CODEX_BASE}/usage`);
+    // A credits outage must not hide the windows that were read.
+    const credits = await apiCall(hub, account, `${CODEX_BASE}/rate-limit-reset-credits`).then(
+      (response) => availableCredits(response, nowMs),
+      () => undefined,
+    );
+    const plan = planLabel(isRecord(usage) ? usage.plan_type : undefined) ?? planLabel(account.id_token?.chatgpt_plan_type);
+    return { provider, label, ...(plan ? { plan } : {}), windows: codexWindows(usage), ...(credits === undefined ? {} : { resetCredits: credits }) };
+  } catch (error) {
+    return { provider, label, windows: [], error: error instanceof Error ? error.message : "The hub could not read this account." };
+  }
+}
+
+async function readHub(hub: HubConfig, nowMs: number): Promise<{ accounts: LimitAccount[]; status: LimitsOutput["hub"] }> {
+  let listed: unknown;
+  try {
+    listed = await management(hub, "auth-files");
+  } catch (error) {
+    return { accounts: [], status: { status: "error", message: error instanceof Error ? error.message : "The hub could not list accounts." } };
+  }
+  const files = isRecord(listed) && Array.isArray(listed.files) ? (listed.files as AuthFile[]) : [];
+  const usable = files.filter((file) => isRecord(file) && !file.disabled && (file.provider === "codex" || file.provider === "claude"));
+  const accounts = await Promise.all(usable.map((file) => readHubAccount(hub, file, nowMs)));
+  return { accounts, status: { status: "ok" } };
+}
+
+async function readOpenCodeGo(env: NodeJS.ProcessEnv): Promise<{ account?: LimitAccount; status: LimitsOutput["openCodeGo"] }> {
+  const dataHome = env.XDG_DATA_HOME || path.join(os.homedir(), ".local", "share");
+  let key = env.OPENCODE_API_KEY?.trim();
+  try {
+    const auth: unknown = JSON.parse(await readFile(path.join(dataHome, "opencode", "auth.json"), "utf8"));
+    const entry = isRecord(auth) ? auth["opencode-go"] : undefined;
+    if (isRecord(entry) && entry.type === "api" && typeof entry.key === "string" && entry.key.trim()) key = entry.key.trim();
+  } catch {
+    // No auth file: fall back to the environment key, if any.
+  }
+  if (!key) return { status: { status: "unsupported", message: "No OpenCode Go key found." } };
+  try {
+    const response = await fetch("https://opencode.ai/zen/go/v1/usage", {
+      headers: { Authorization: `Bearer ${key}` },
+      signal: AbortSignal.timeout(HUB_TIMEOUT_MS),
+    });
+    // A valid Zen key can exist without a Go subscription.
+    if (response.status === 403) return { status: { status: "unsupported", message: "This key has no OpenCode Go plan." } };
+    if (!response.ok) throw new Error(`OpenCode answered HTTP ${response.status}.`);
+    return { account: { provider: "opencode-go", label: "OpenCode Go", windows: openCodeGoWindows(await response.json()) }, status: { status: "ok" } };
+  } catch (error) {
+    return { status: { status: "error", message: error instanceof Error ? error.message : "OpenCode Go could not be read." } };
+  }
+}
+
+export interface LimitsOptions {
+  readonly nowMs: number;
+  readonly hubUrl?: string;
+  readonly hubKey?: string;
+  readonly openCodeGo: boolean;
+  readonly env?: NodeJS.ProcessEnv;
+}
+
+export async function readLimits(options: LimitsOptions): Promise<LimitsOutput> {
+  const env = options.env ?? process.env;
+  const hubUrl = options.hubUrl?.trim();
+  const hubKey = options.hubKey?.trim();
+  const [hub, go] = await Promise.all([
+    hubUrl && hubKey
+      ? readHub({ url: hubUrl, key: hubKey }, options.nowMs)
+      : Promise.resolve({ accounts: [], status: { status: "off" as const, message: hubUrl ? "No management key configured." : undefined } }),
+    options.openCodeGo ? readOpenCodeGo(env) : Promise.resolve({ status: { status: "off" as const } }),
+  ]);
+  return {
+    accounts: [...hub.accounts, ...("account" in go && go.account ? [go.account] : [])],
+    hub: hub.status,
+    openCodeGo: go.status,
+  };
+}

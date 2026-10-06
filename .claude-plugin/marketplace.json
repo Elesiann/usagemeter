@@ -1,0 +1,6 @@
+{
+  "name": "ledger",
+  "description": "Cost, tokens and plan limits across your coding agents, in a Claude Code pane",
+  "owner": { "name": "Elesiann" },
+  "plugins": [{ "name": "ledger", "source": "./" }]
+}

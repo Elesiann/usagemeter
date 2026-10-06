@@ -1,0 +1,18 @@
+{
+  "name": "ledger",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "bun build helper/src/main.ts --target node --format esm --minify-syntax --outfile helper/dist/ledger-helper.mjs",
+    "typecheck": "tsc -p helper/tsconfig.json",
+    "test:helper": "node --no-warnings --test helper/test/*.spec.ts",
+    "test": "npm run -s test:helper"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "effect": "4.0.1",
+    "stream-chain": "^4.2.5",
+    "stream-json": "3.6.0",
+    "typescript": "^5.9.0"
+  }
+}
