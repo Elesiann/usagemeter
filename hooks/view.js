@@ -5,9 +5,7 @@ import {
   GROUPS,
   RANGE_LABELS,
   clockLabel,
-  dayLabel,
   duration,
-  instantDayLabel,
   money,
   percent,
   pointLabel,
@@ -104,7 +102,7 @@ function chart(el, s, range, metric, width) {
       color: providerColor(provider),
     })),
   }))
-  const { rows } = barChart({ columns, width, height: 10, cursor: s.cursor, format: metric === 'cost' ? (n) => '$' + compact(n) : tokens })
+  const { rows } = barChart({ columns, width, height: 10, format: metric === 'cost' ? (n) => '$' + compact(n) : tokens })
   const title = (range.resolution === 'hour' ? 'Hourly ' : 'Daily ') + (metric === 'cost' ? 'cost' : 'processed tokens')
   return col(el, [text(el, title, { bold: true }), ...lines(el, rows, 'chart')])
 }
@@ -115,31 +113,6 @@ function compact(n) {
   if (n >= 100) return Math.round(n).toString()
   if (n >= 1) return n.toFixed(1)
   return n.toFixed(2)
-}
-
-/** The point under the cursor, with its top models. */
-function detail(el, s, range, metric) {
-  const point = range.points[s.cursor]
-  if (!point) return null
-  const label = range.resolution === 'hour' ? instantDayLabel(point.key, s.usage.timeZone) + ' ' + pointLabel(point, 'hour', s.usage.timeZone) : dayLabel(point.key)
-  const children = [
-    row(el, [
-      text(el, '▲ ' + label + '  ', { bold: true }),
-      text(el, money(point.costUsd) + ' · ' + tokens(point.tokens) + ' tokens   '),
-      el.Button({ key: 'prev', label: '◀', hotkey: 'h', plain: true, onPress: () => s.act.move(-1) }),
-      text(el, ' '),
-      el.Button({ key: 'next', label: '▶', hotkey: 'l', plain: true, onPress: () => s.act.move(1) }),
-    ]),
-  ]
-  if (point.models.length === 0) children.push(text(el, '  No activity.', { dimColor: true }))
-  for (const m of point.models.slice(0, 5)) {
-    children.push(row(el, [
-      text(el, '  ● ', { color: providerColor(m.provider) }),
-      text(el, m.model.padEnd(32).slice(0, 32)),
-      text(el, money(m.costUsd).padStart(11) + tokens(m.tokens).padStart(9), { dimColor: metric !== 'cost' }),
-    ]))
-  }
-  return col(el, children)
 }
 
 function totals(el, range, metric, width) {
@@ -237,10 +210,8 @@ function usageTab(el, s, width) {
   const top = wide
     ? row(el, [col(el, [summary(el, s, range, metric)], { width: SIDE }), chart(el, s, range, metric, chartW)], { columnGap: 3 })
     : col(el, [summary(el, s, range, metric), blank(el), chart(el, s, range, metric, chartW)])
-  const detailNode = detail(el, s, range, metric)
   return col(el, [
     top,
-    ...(detailNode ? [blank(el), detailNode] : []),
     blank(el),
     totals(el, range, metric, width),
     blank(el),

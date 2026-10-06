@@ -99,20 +99,14 @@ test('/ledger scans, reads limits with the key in the environment, and draws the
   const ui = await $.ui.mount(PANE)
   expect(await ui.find({ type: 'Text', text: '$42.50' })).toBeDefined()
   expect(await ui.find({ type: 'Text', text: 'Daily cost' })).toBeDefined()
-  // The cursor starts on the latest day.
-  expect(await ui.find({ type: 'Text', text: /^▲ Oct 5/ })).toBeDefined()
 })
 
-test('keys switch tab, range, grouping and the selected day', async ($, on) => {
+test('keys switch tab, range and grouping', async ($, on) => {
   stubs(on, [])
   await $.session.start({ surface: 'terminal', isInteractive: true, cwd: '/work' })
   await $.command.run({ command: 'ledger', args: '' })
   await settle()
   const ui = await $.ui.mount(PANE)
-
-  await ui.press({ key: 'prev' })
-  expect(await ui.find({ type: 'Text', text: /^▲ Oct 4/ })).toBeDefined()
-  expect(await ui.find({ type: 'Text', text: '  No activity.' })).toBeDefined()
 
   await ui.press({ key: 'tab-tokens' })
   expect(await ui.find({ type: 'Text', text: 'Daily processed tokens' })).toBeDefined()
@@ -162,7 +156,7 @@ test('a failed scan is reported in the pane', async ($, on) => {
 
 test('charts fit the width they are given', () => {
   const columns = Array.from({ length: 90 }, (_, i) => ({ total: i, label: 'd' + i, parts: [{ key: 'claude', value: i, color: '#d97757' }] }))
-  const { rows, merged } = barChart({ columns, width: 60, height: 6, cursor: 89 })
+  const { rows, merged } = barChart({ columns, width: 60, height: 6 })
   expect(merged.length <= 60).toBe(true)
   for (const row of rows) expect(row.reduce((n: number, seg: { text: string }) => n + seg.text.length, 0) <= 60).toBe(true)
   const bar = splitBar([{ value: 1, color: 'a' }, { value: 1000, color: 'b' }, { value: 0, color: 'c' }], 40)

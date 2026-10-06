@@ -57,15 +57,6 @@ export function hourLabel(iso, timeZone) {
   }
 }
 
-/** `Oct 5` for the day an ISO instant falls on in the given zone. */
-export function instantDayLabel(iso, timeZone) {
-  try {
-    return dayLabel(new Date(iso).toLocaleDateString('en-CA', { timeZone }))
-  } catch {
-    return dayLabel(iso.slice(0, 10))
-  }
-}
-
 export const pointLabel = (point, resolution, timeZone) =>
   resolution === 'hour' ? hourLabel(point.key, timeZone) : dayLabel(point.key)
 

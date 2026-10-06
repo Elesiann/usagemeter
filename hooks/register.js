@@ -18,8 +18,6 @@ let config = {}
 let tab = 'cost'
 let range = '7d'
 let group = 'model'
-/** Index of the selected point in the current range; null follows the latest one. */
-let cursor = null
 let usage = null
 let usageError = null
 let scanning = false
@@ -118,10 +116,6 @@ function refresh($, force) {
   refreshLimits($)
 }
 
-function pointCount() {
-  return usage?.ranges?.[range]?.points?.length ?? 0
-}
-
 export function register(on, options) {
   config = options ?? {}
 
@@ -159,7 +153,6 @@ export function register(on, options) {
   on('ui.render', { component: 'Pane' }, async ($, e, next) => {
     if (e.requestId !== PANE) return next(e)
     const redraw = () => $.ui.invalidate('ui.render')
-    const points = pointCount()
     if (tab === 'limits') {
       // Read on every draw: a reload clears module state, and the call costs nothing.
       const native = await $.session.usage()
@@ -169,7 +162,6 @@ export function register(on, options) {
       tab,
       range,
       group,
-      cursor: points === 0 ? null : cursor === null ? points - 1 : Math.min(cursor, points - 1),
       usage,
       error: usageError,
       busy: scanning || limitsBusy,
@@ -187,18 +179,10 @@ export function register(on, options) {
         },
         cycleRange: () => {
           range = nextOf(RANGES, range)
-          cursor = null
           redraw()
         },
         cycleGroup: () => {
           group = nextOf(GROUPS, group)
-          redraw()
-        },
-        move: (delta) => {
-          const count = pointCount()
-          if (count === 0) return
-          const current = cursor === null ? count - 1 : cursor
-          cursor = Math.max(0, Math.min(count - 1, current + delta))
           redraw()
         },
         refresh: () => refresh($, true),

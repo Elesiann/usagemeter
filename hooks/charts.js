@@ -49,13 +49,12 @@ export function fitColumns(columns, slots) {
 }
 
 /**
- * A stacked bar chart with eighth-block tops, a y axis, a cursor marker and
- * x labels, in the style of Codex's /usage.
+ * A stacked bar chart with eighth-block tops, a y axis and x labels, in the
+ * style of Codex's /usage.
  *
  * `columns`: `{ total, label, parts: [{ key, value, color }] }`, oldest first.
- * `cursor`: index into `columns` to mark, or null.
  */
-export function barChart({ columns, width, height, cursor = null, format = String, showValues = true }) {
+export function barChart({ columns, width, height, format = String, showValues = true }) {
   const max = Math.max(...columns.map((c) => c.total), 0)
   const axisLabels = [format(max), format(max / 2), format(0)]
   const axisW = Math.max(...axisLabels.map((l) => l.length)) + 1
@@ -99,16 +98,7 @@ export function barChart({ columns, width, height, cursor = null, format = Strin
     rows.push(pack(cells))
   }
 
-  // Cursor marker and x labels.
-  const marker = []
-  const selected = cursor === null ? -1 : merged.findIndex((c) => cursor >= c.first && cursor <= c.last)
-  marker.push({ text: ' '.repeat(axisW) })
-  merged.forEach((_, i) => {
-    marker.push(i === selected ? { text: pad('▲', barW, 'center'), bold: true } : { text: ' '.repeat(barW) })
-    if (slot > barW) marker.push({ text: ' '.repeat(slot - barW) })
-  })
-  rows.push(pack(marker))
-
+  // X labels: the first, the middle when there is room, and the last.
   const span = merged.length * slot
   const first = merged[0]?.label ?? ''
   const last = merged.at(-1)?.lastLabel ?? ''

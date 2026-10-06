@@ -41,7 +41,6 @@ refreshes it in the background when it is older than five minutes.
 | `1` `2` `3` | Cost, Tokens, Limits |
 | `r` | Cycle the range: past 24h (hourly), 7, 30, 90 days |
 | `g` | Group the breakdown by model, provider or day |
-| `h` `l` | Move the selected day (or hour) and show its top models |
 | `u` | Refresh now |
 | `Esc` | Close |
 
