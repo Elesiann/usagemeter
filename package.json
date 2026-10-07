@@ -19,7 +19,7 @@
     "test": "npm run -s test:helper"
   },
   "devDependencies": {
-    "@types/node": "^22.0.0",
+    "@types/node": "^26.6.4",
     "effect": "4.0.1",
     "stream-chain": "^4.2.5",
     "stream-json": "3.7.0",
