@@ -34,6 +34,12 @@
       "title": "Read OpenCode Go limits",
       "description": "Read the OpenCode Go key from OpenCode's auth.json (or OPENCODE_API_KEY) to show Go plan limits",
       "default": false
+    },
+    "hubAutostart": {
+      "type": "boolean",
+      "title": "Restart a stopped local hub",
+      "description": "When the hub URL is local and nothing answers, start the CLIProxyAPI binary before reading limits",
+      "default": true
     }
   }
 }

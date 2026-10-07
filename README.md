@@ -133,6 +133,7 @@ Plan limits need a CLIProxyAPI hub. Set its address and management key with:
 | `hubUrl` | `http://localhost:8317` | Base URL of your CLIProxyAPI instance |
 | `hubKey` | empty | Management key. Kept in Claude Code's secure storage; empty skips the hub |
 | `openCodeGo` | `false` | Read OpenCode Go limits with OpenCode's own key |
+| `hubAutostart` | `true` | When the hub URL is local and nothing answers, start the hub before reading limits |
 
 From a shell, pipe the values instead, which keeps the key out of your shell
 history:
@@ -156,6 +157,7 @@ variables the agents do:
 | `ANTIGRAVITY_DATA_DIR` | Antigravity's conversation directories |
 | `USAGEMETER_HOME` | Read all history from another home, for example `/mnt/c/Users/you` from WSL |
 | `USAGEMETER_CACHE_DIR` | Where the scan and price caches live (default `~/.cache/usagemeter`) |
+| `USAGEMETER_HUB_BIN` | Hub binary to start, when it is not `~/.local/bin/cli-proxy-api` |
 
 `CODEX_HOME`, `OPENCODE_DATA_DIR` and `ANTIGRAVITY_DATA_DIR` accept
 comma-separated lists.
@@ -214,7 +216,7 @@ See [SECURITY.md](SECURITY.md) for details and how to report a vulnerability.
 | --- | --- |
 | A message starting `usagemeter needs Node.js 22.5 or later on PATH` | Install Node.js 22.5+ and check that `node --version` works in the shell that starts Claude Code |
 | `CLIProxyAPI hub not configured` | Set `hubKey` (and `hubUrl` if the hub is not on port 8317), then restart |
-| `The hub could not be reached (ECONNREFUSED)` | Start CLIProxyAPI, or fix `hubUrl` |
+| `The hub could not be reached (ECONNREFUSED)` | A local hub is restarted automatically (`hubAutostart`, needs the binary on `PATH` or `USAGEMETER_HUB_BIN`); otherwise start CLIProxyAPI, or fix `hubUrl` |
 | `The hub answered HTTP 401.` | The management key is wrong; set it again |
 | Claude limits are empty without a hub | This session has had no reply yet; they appear after the first one |
 | `/usagemeter` is missing | Run `/plugin`, check that `usagemeter` is enabled, then `/reload-plugins` |

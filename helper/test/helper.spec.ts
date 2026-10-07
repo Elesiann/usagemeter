@@ -6,7 +6,7 @@ import { test } from "node:test";
 
 import { createServer } from "node:http";
 
-import { antigravitySummaryWindows, antigravityWindows, availableCredits, claudeWindows, codexWindows, readLimits } from "../src/limits.ts";
+import { antigravitySummaryWindows, antigravityWindows, availableCredits, claudeWindows, codexWindows, ensureHubUp, isLoopbackHub, readLimits } from "../src/limits.ts";
 import { scan, shiftDay } from "../src/scan.ts";
 import { transcriptSources } from "../src/sources.ts";
 import { createOverrideRateTable } from "../src/t3/usage/usagePricing.ts";
@@ -229,6 +229,79 @@ test("an unreachable hub is reported with the network error code only", async ()
   const out = await readLimits({ nowMs: Date.now(), hubUrl: "http://127.0.0.1:9", hubKey: "k", openCodeGo: false, env: {} });
   assert.equal(out.hub.status, "error");
   assert.match(out.hub.message ?? "", /^The hub could not be reached( \([A-Z_]+\))?$/);
+});
+
+test("only a loopback hub URL may be started", () => {
+  assert.ok(isLoopbackHub("http://localhost:8317"));
+  assert.ok(isLoopbackHub("http://127.0.0.1:8317"));
+  assert.ok(isLoopbackHub("http://[::1]:8317"));
+  assert.ok(!isLoopbackHub("http://proxy.lan:8317"));
+  assert.ok(!isLoopbackHub("not a url"));
+});
+
+test("no restart is attempted for a remote hub or when autostart is off", async () => {
+  let calls = 0;
+  const spawn = () => {
+    calls += 1;
+    return { once() {}, unref() {} };
+  };
+  assert.equal(await ensureHubUp("http://proxy.lan:8317", { autostart: true, home: os.tmpdir(), spawn }), false);
+  assert.equal(await ensureHubUp("http://127.0.0.1:9", { autostart: false, home: os.tmpdir(), spawn }), false);
+  assert.equal(calls, 0);
+});
+
+test("a missing explicit binary fails without searching PATH", async () => {
+  let calls = 0;
+  const spawn = () => {
+    calls += 1;
+    return { once() {}, unref() {} };
+  };
+  assert.equal(await ensureHubUp("http://127.0.0.1:9", { autostart: true, bin: "/nonexistent/cli-proxy-api", home: os.tmpdir(), spawn }), false);
+  assert.equal(calls, 0);
+});
+
+test("a refused loopback hub is restarted through the injected spawner", async () => {
+  // The "hub" is this test's own server; the spawner only records the call.
+  const server = createServer((req, res) => {
+    if (req.url === "/v0/management/auth-files") return res.end(JSON.stringify({ files: [] }));
+    res.end("ok");
+  });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  try {
+    const { port } = server.address() as { port: number };
+    const spawned: Array<{ command: string; args: readonly string[] }> = [];
+    const out = await readLimits({
+      nowMs: Date.now(),
+      hubUrl: `http://127.0.0.1:${port}`,
+      hubKey: "k",
+      openCodeGo: false,
+      env: {},
+      hubAutostart: true,
+      hubBin: "/nonexistent/cli-proxy-api",
+      hubSpawn: (command, args) => {
+        spawned.push({ command, args });
+        return { once() {}, unref() {} };
+      },
+    });
+    // The hub answers, so no restart is needed and the spawner stays idle.
+    assert.equal(spawned.length, 0);
+    assert.equal(out.hub.status, "ok");
+    const started = await ensureHubUp(`http://127.0.0.1:${port}`, {
+      autostart: true,
+      bin: process.execPath,
+      home: os.tmpdir(),
+      timeoutMs: 5_000,
+      spawn: (command, args) => {
+        spawned.push({ command, args });
+        return { once() {}, unref() {} };
+      },
+    });
+    assert.equal(started, true);
+    assert.equal(spawned.length, 1);
+    assert.equal(spawned[0]!.command, process.execPath);
+  } finally {
+    server.close();
+  }
 });
 
 test("the 24h range covers every record of the past 24 hours", async () => {

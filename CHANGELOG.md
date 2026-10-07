@@ -6,6 +6,14 @@ All notable changes to usagemeter are listed here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- The Limits tab restarts a stopped local CLIProxyAPI hub before reading: when
+  the hub URL is loopback and the connection is refused, the helper starts
+  `~/.local/bin/cli-proxy-api` (or `USAGEMETER_HUB_BIN`) with
+  `~/.cli-proxy-api/config.yaml` and reads once it answers. Disable with
+  `hubAutostart: false` in `/plugin configure usagemeter`.
+
 ## [0.2.0] - 2026-10-05
 
 First public release.

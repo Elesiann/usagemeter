@@ -3,7 +3,8 @@
 //
 //   usagemeter-helper scan [--tz <zone>] [--refresh-rates]
 //   usagemeter-helper limits      (hub URL and key from USAGEMETER_HUB_URL / USAGEMETER_HUB_KEY,
-//                              OpenCode Go when USAGEMETER_OPENCODE_GO=1)
+//                              OpenCode Go when USAGEMETER_OPENCODE_GO=1, hub autostart
+//                              when USAGEMETER_HUB_AUTOSTART=1 with an optional USAGEMETER_HUB_BIN)
 import * as os from "node:os";
 import * as path from "node:path";
 
@@ -49,6 +50,8 @@ async function main(argv: readonly string[]): Promise<number> {
       hubUrl: env.USAGEMETER_HUB_URL,
       hubKey: env.USAGEMETER_HUB_KEY,
       openCodeGo: env.USAGEMETER_OPENCODE_GO === "1",
+      hubAutostart: env.USAGEMETER_HUB_AUTOSTART === "1",
+      ...(env.USAGEMETER_HUB_BIN?.trim() ? { hubBin: env.USAGEMETER_HUB_BIN.trim() } : {}),
       env,
     });
     write({ version: OUTPUT_VERSION, checkedAt: new Date().toISOString(), ...result });
