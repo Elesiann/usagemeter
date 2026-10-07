@@ -23,6 +23,6 @@
     "effect": "4.0.1",
     "stream-chain": "^4.2.5",
     "stream-json": "3.7.0",
-    "typescript": "^5.9.0"
+    "typescript": "^7.0.2"
   }
 }
