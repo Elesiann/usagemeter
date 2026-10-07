@@ -19,6 +19,8 @@ import * as os3 from "node:os";
 import * as path5 from "node:path";
 
 // helper/src/limits.ts
+import { spawn } from "node:child_process";
+import { existsSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -156,6 +158,62 @@ function parseJson(text, source) {
     throw new LimitsError(`${source} returned a response that is not JSON.`);
   }
 }
+var HUB_START_TIMEOUT_MS = 15000, HUB_START_POLL_MS = 250;
+function isLoopbackHub(hubUrl) {
+  let host = "";
+  try {
+    host = new URL(hubUrl).hostname.toLowerCase();
+  } catch {
+    return !1;
+  }
+  if (host.endsWith("."))
+    host = host.slice(0, -1);
+  return host === "localhost" || host === "127.0.0.1" || host === "::1" || host === "[::1]";
+}
+function hubBinary(deps) {
+  if (deps.bin?.trim())
+    return existsSync(deps.bin.trim()) ? deps.bin.trim() : void 0;
+  let local = path.join(deps.home, ".local", "bin", "cli-proxy-api");
+  if (existsSync(local))
+    return local;
+  return "cli-proxy-api";
+}
+async function hubListening(hubUrl, timeoutMs) {
+  let origin = "";
+  try {
+    origin = new URL(hubUrl).origin;
+  } catch {
+    return !1;
+  }
+  let deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    try {
+      return await fetch(origin + "/", { signal: AbortSignal.timeout(2000) }), !0;
+    } catch {}
+    await new Promise((resolve) => setTimeout(resolve, HUB_START_POLL_MS));
+  }
+  return !1;
+}
+async function ensureHubUp(hubUrl, deps) {
+  if (!deps.autostart || !isLoopbackHub(hubUrl))
+    return !1;
+  let bin = hubBinary(deps);
+  if (!bin)
+    return !1;
+  let config = path.join(deps.home, ".cli-proxy-api", "config.yaml"), args = existsSync(config) ? ["-config", config] : [], run = deps.spawn ?? ((command, spawnArgs) => spawn(command, [...spawnArgs], { detached: !0, stdio: "ignore", windowsHide: !0 })), child;
+  try {
+    child = run(bin, args);
+  } catch {
+    return !1;
+  }
+  let failed = !1;
+  if (child.once("error", () => {
+    failed = !0;
+  }), child.unref(), await new Promise((resolve) => setTimeout(resolve, 100)), failed)
+    return !1;
+  return hubListening(hubUrl, deps.timeoutMs ?? HUB_START_TIMEOUT_MS);
+}
+var connectionRefused = (error) => error instanceof Error && isRecord(error.cause) && error.cause.code === "ECONNREFUSED";
 async function management(hub, route, body) {
   let response = await fetch(new URL(`/v0/management/${route}`, hub.url), {
     method: body === void 0 ? "GET" : "POST",
@@ -224,15 +282,22 @@ async function readHubAccount(hub, account, nowMs) {
     return { provider, label, windows: [], error: describe(error, "The hub could not read this account.") };
   }
 }
-async function readHub(hub, nowMs) {
-  let listed;
+async function readHub(hub, nowMs, start) {
+  let listed, restarted = !1;
   try {
     listed = await management(hub, "auth-files");
   } catch (error) {
-    return { accounts: [], status: { status: "error", message: describe(error, "The hub could not be reached") } };
+    if (connectionRefused(error) && await ensureHubUp(hub.url, start))
+      try {
+        listed = await management(hub, "auth-files"), restarted = !0;
+      } catch (retryError) {
+        return { accounts: [], status: { status: "error", message: describe(retryError, "The hub could not be reached") } };
+      }
+    else
+      return { accounts: [], status: { status: "error", message: describe(error, "The hub could not be reached") } };
   }
   let usable = (isRecord(listed) && Array.isArray(listed.files) ? listed.files : []).filter((file) => isRecord(file) && !file.disabled && ["codex", "claude", "antigravity"].includes(file.provider));
-  return { accounts: await Promise.all(usable.map((file) => readHubAccount(hub, file, nowMs))), status: { status: "ok" } };
+  return { accounts: await Promise.all(usable.map((file) => readHubAccount(hub, file, nowMs))), status: { status: "ok", ...restarted ? { restarted: !0 } : {} } };
 }
 async function readOpenCodeGo(env) {
   let dataHome = env.XDG_DATA_HOME || path.join(env.HOME?.trim() || os.homedir(), ".local", "share"), key = env.OPENCODE_API_KEY?.trim();
@@ -258,8 +323,13 @@ async function readOpenCodeGo(env) {
   }
 }
 async function readLimits(options) {
-  let env = options.env ?? process.env, hubUrl = options.hubUrl?.trim(), hubKey = options.hubKey?.trim(), [hub, go] = await Promise.all([
-    hubUrl && hubKey ? readHub({ url: hubUrl, key: hubKey }, options.nowMs) : Promise.resolve({ accounts: [], status: { status: "off", message: hubUrl ? "No management key configured." : void 0 } }),
+  let env = options.env ?? process.env, hubUrl = options.hubUrl?.trim(), hubKey = options.hubKey?.trim(), home = env.HOME?.trim() || os.homedir(), [hub, go] = await Promise.all([
+    hubUrl && hubKey ? readHub({ url: hubUrl, key: hubKey }, options.nowMs, {
+      autostart: options.hubAutostart ?? !1,
+      ...options.hubBin ? { bin: options.hubBin } : {},
+      home,
+      ...options.hubSpawn ? { spawn: options.hubSpawn } : {}
+    }) : Promise.resolve({ accounts: [], status: { status: "off", message: hubUrl ? "No management key configured." : void 0 } }),
     options.openCodeGo ? readOpenCodeGo(env) : Promise.resolve({ status: { status: "off" } })
   ]);
   return {
@@ -2764,7 +2834,7 @@ function dedupeWithinFile(records, seen = /* @__PURE__ */ new Set) {
 }
 
 // helper/src/sources.ts
-import { existsSync, realpathSync } from "node:fs";
+import { existsSync as existsSync2, realpathSync } from "node:fs";
 import * as os2 from "node:os";
 import * as path3 from "node:path";
 var historyHome = (env) => env.USAGEMETER_HOME?.trim() || env.HOME?.trim() || os2.homedir(), canonical = (dir) => {
@@ -2800,7 +2870,7 @@ function antigravityDirs(env = process.env) {
   ], dirs = /* @__PURE__ */ new Set;
   for (let root of roots) {
     let resolved = canonical(expandHome(root, home)), nested = path3.join(resolved, "conversations");
-    dirs.add(canonical(existsSync(nested) ? nested : resolved));
+    dirs.add(canonical(existsSync2(nested) ? nested : resolved));
   }
   return [...dirs];
 }
@@ -3064,6 +3134,8 @@ async function main(argv) {
       hubUrl: env.USAGEMETER_HUB_URL,
       hubKey: env.USAGEMETER_HUB_KEY,
       openCodeGo: env.USAGEMETER_OPENCODE_GO === "1",
+      hubAutostart: env.USAGEMETER_HUB_AUTOSTART === "1",
+      ...env.USAGEMETER_HUB_BIN?.trim() ? { hubBin: env.USAGEMETER_HUB_BIN.trim() } : {},
       env
     });
     return write({ version: OUTPUT_VERSION, checkedAt: (/* @__PURE__ */ new Date()).toISOString(), ...result }), 0;

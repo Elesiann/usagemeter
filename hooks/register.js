@@ -115,6 +115,7 @@ async function refreshLimits($) {
         USAGEMETER_HUB_URL: String(config.hubUrl ?? ''),
         USAGEMETER_HUB_KEY: String(config.hubKey ?? ''),
         USAGEMETER_OPENCODE_GO: config.openCodeGo ? '1' : '0',
+        USAGEMETER_HUB_AUTOSTART: config.hubAutostart === false ? '0' : '1',
       },
     })
     const doc = parseOutput(result.stdout)

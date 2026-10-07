@@ -292,6 +292,7 @@ function limitsTab(el, s, width) {
   const hub = s.limits?.hub
   if (hub?.status === 'off') notes.push('CLIProxyAPI hub not configured: set hubUrl and hubKey with /plugin configure usagemeter.')
   if (hub?.status === 'error') notes.push('CLIProxyAPI hub: ' + hub.message)
+  if (hub?.status === 'ok' && hub?.restarted) notes.push('The CLIProxyAPI hub was down and has been restarted.')
   const go = s.limits?.openCodeGo
   if (go?.status === 'error' || go?.status === 'unsupported') notes.push('OpenCode Go: ' + go.message)
   if (s.limitsError) notes.push('Limits: ' + s.limitsError)

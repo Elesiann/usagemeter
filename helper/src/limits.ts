@@ -1,6 +1,8 @@
 // Plan limits from a CLIProxyAPI hub (Codex and Claude accounts) and from
 // OpenCode Go, normalized the way T3 Code normalizes them
 // (apps/server/src/usage/cliproxyApi.ts and provider/Layers/*UsageLimits.ts).
+import { spawn } from "node:child_process";
+import { existsSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -28,7 +30,7 @@ export interface LimitAccount {
 
 export interface LimitsOutput {
   readonly accounts: LimitAccount[];
-  readonly hub: { readonly status: "ok" | "off" | "error"; readonly message?: string };
+  readonly hub: { readonly status: "ok" | "off" | "error"; readonly message?: string; readonly restarted?: boolean };
   readonly openCodeGo: { readonly status: "ok" | "off" | "unsupported" | "error"; readonly message?: string };
 }
 
@@ -224,6 +226,96 @@ interface HubConfig {
   readonly key: string;
 }
 
+/** Spawns the hub detached; only `once("error")` and `unref()` are used. Exported for tests. */
+export type HubSpawner = (command: string, args: readonly string[]) => {
+  once(event: "error", listener: () => void): void;
+  unref(): void;
+};
+
+export interface HubStartDeps {
+  readonly autostart: boolean;
+  /** Explicit binary (USAGEMETER_HUB_BIN). When set and missing, PATH is not searched. */
+  readonly bin?: string;
+  readonly home: string;
+  readonly timeoutMs?: number;
+  readonly spawn?: HubSpawner;
+}
+
+const HUB_START_TIMEOUT_MS = 15_000;
+const HUB_START_POLL_MS = 250;
+
+/** Only a hub on this machine may be started; anything else is left alone. Exported for tests. */
+export function isLoopbackHub(hubUrl: string): boolean {
+  let host = "";
+  try {
+    host = new URL(hubUrl).hostname.toLowerCase();
+  } catch {
+    return false;
+  }
+  if (host.endsWith(".")) host = host.slice(0, -1);
+  return host === "localhost" || host === "127.0.0.1" || host === "::1" || host === "[::1]";
+}
+
+function hubBinary(deps: HubStartDeps): string | undefined {
+  if (deps.bin?.trim()) return existsSync(deps.bin.trim()) ? deps.bin.trim() : undefined;
+  const local = path.join(deps.home, ".local", "bin", "cli-proxy-api");
+  if (existsSync(local)) return local;
+  // PATH lookup: a missing binary surfaces as an async "error" event below.
+  return "cli-proxy-api";
+}
+
+/** Any HTTP answer means something listens; the body is never read. */
+async function hubListening(hubUrl: string, timeoutMs: number): Promise<boolean> {
+  let origin = "";
+  try {
+    origin = new URL(hubUrl).origin;
+  } catch {
+    return false;
+  }
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    try {
+      await fetch(origin + "/", { signal: AbortSignal.timeout(2000) });
+      return true;
+    } catch {
+      // Not up yet.
+    }
+    await new Promise((resolve) => setTimeout(resolve, HUB_START_POLL_MS));
+  }
+  return false;
+}
+
+/**
+ * Start a stopped local hub and wait until it answers. Best effort: false
+ * means the caller reports the original connection error. Exported for tests.
+ */
+export async function ensureHubUp(hubUrl: string, deps: HubStartDeps): Promise<boolean> {
+  if (!deps.autostart || !isLoopbackHub(hubUrl)) return false;
+  const bin = hubBinary(deps);
+  if (!bin) return false;
+  const config = path.join(deps.home, ".cli-proxy-api", "config.yaml");
+  const args = existsSync(config) ? ["-config", config] : [];
+  const run: HubSpawner = deps.spawn ?? ((command, spawnArgs) => spawn(command, [...spawnArgs], { detached: true, stdio: "ignore", windowsHide: true }));
+  let child: ReturnType<HubSpawner>;
+  try {
+    child = run(bin, args);
+  } catch {
+    return false;
+  }
+  let failed = false;
+  child.once("error", () => {
+    failed = true;
+  });
+  child.unref();
+  // Let a synchronous ENOENT surface before polling for the port.
+  await new Promise((resolve) => setTimeout(resolve, 100));
+  if (failed) return false;
+  return hubListening(hubUrl, deps.timeoutMs ?? HUB_START_TIMEOUT_MS);
+}
+
+const connectionRefused = (error: unknown): boolean =>
+  error instanceof Error && isRecord(error.cause) && (error.cause as { code?: unknown }).code === "ECONNREFUSED";
+
 async function management(hub: HubConfig, route: string, body?: unknown): Promise<unknown> {
   const response = await fetch(new URL(`/v0/management/${route}`, hub.url), {
     method: body === undefined ? "GET" : "POST",
@@ -323,17 +415,27 @@ async function readHubAccount(hub: HubConfig, account: AuthFile, nowMs: number):
   }
 }
 
-async function readHub(hub: HubConfig, nowMs: number): Promise<{ accounts: LimitAccount[]; status: LimitsOutput["hub"] }> {
+async function readHub(hub: HubConfig, nowMs: number, start: HubStartDeps): Promise<{ accounts: LimitAccount[]; status: LimitsOutput["hub"] }> {
   let listed: unknown;
+  let restarted = false;
   try {
     listed = await management(hub, "auth-files");
   } catch (error) {
-    return { accounts: [], status: { status: "error", message: describe(error, "The hub could not be reached") } };
+    if (connectionRefused(error) && (await ensureHubUp(hub.url, start))) {
+      try {
+        listed = await management(hub, "auth-files");
+        restarted = true;
+      } catch (retryError) {
+        return { accounts: [], status: { status: "error", message: describe(retryError, "The hub could not be reached") } };
+      }
+    } else {
+      return { accounts: [], status: { status: "error", message: describe(error, "The hub could not be reached") } };
+    }
   }
   const files = isRecord(listed) && Array.isArray(listed.files) ? (listed.files as AuthFile[]) : [];
   const usable = files.filter((file) => isRecord(file) && !file.disabled && ["codex", "claude", "antigravity"].includes(file.provider));
   const accounts = await Promise.all(usable.map((file) => readHubAccount(hub, file, nowMs)));
-  return { accounts, status: { status: "ok" } };
+  return { accounts, status: { status: "ok", ...(restarted ? { restarted: true as const } : {}) } };
 }
 
 async function readOpenCodeGo(env: NodeJS.ProcessEnv): Promise<{ account?: LimitAccount; status: LimitsOutput["openCodeGo"] }> {
@@ -368,15 +470,27 @@ export interface LimitsOptions {
   readonly hubKey?: string;
   readonly openCodeGo: boolean;
   readonly env?: NodeJS.ProcessEnv;
+  /** Restart a stopped loopback hub before reading. Off unless enabled. */
+  readonly hubAutostart?: boolean;
+  /** Explicit hub binary (USAGEMETER_HUB_BIN). */
+  readonly hubBin?: string;
+  /** Test-only hub spawner. */
+  readonly hubSpawn?: HubSpawner;
 }
 
 export async function readLimits(options: LimitsOptions): Promise<LimitsOutput> {
   const env = options.env ?? process.env;
   const hubUrl = options.hubUrl?.trim();
   const hubKey = options.hubKey?.trim();
+  const home = env.HOME?.trim() || os.homedir();
   const [hub, go] = await Promise.all([
     hubUrl && hubKey
-      ? readHub({ url: hubUrl, key: hubKey }, options.nowMs)
+      ? readHub({ url: hubUrl, key: hubKey }, options.nowMs, {
+          autostart: options.hubAutostart ?? false,
+          ...(options.hubBin ? { bin: options.hubBin } : {}),
+          home,
+          ...(options.hubSpawn ? { spawn: options.hubSpawn } : {}),
+        })
       : Promise.resolve({ accounts: [], status: { status: "off" as const, message: hubUrl ? "No management key configured." : undefined } }),
     options.openCodeGo ? readOpenCodeGo(env) : Promise.resolve({ status: { status: "off" as const } }),
   ]);
