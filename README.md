@@ -121,10 +121,17 @@ apart. The first limits update is a warm-up. Its duration appears as
 `warmupMs`, outside the median and p90 for the 10 measured updates. The helper
 saves sample times and metadata in `bench-<UTC timestamp>-<run id>.json` under
 the usagemeter cache directory, which defaults to `~/.cache/usagemeter`. The
-report contains no account labels, quota values, or hub key. If the hub returns
-no or incomplete account limit data, or a configured limits source fails, the
-bench exits with an error and does not save a report. The bench needs a
-configured hub URL and management key, and may take several minutes.
+report contains no account labels, quota values, or hub key: every limits
+round records only how many accounts answered with windows (`ok`) and how
+many errored or came back empty (`failed`). A hub account without data no
+longer aborts the run; neither does a missing OpenCode Go key or plan, nor an
+OpenCode Go plan on its own without hub accounts. The bench fails only when
+the hub does not answer or when no account returns windows in a round, and
+then it exits with an error and does not save a report. When the account
+counts change between rounds, the report carries a `limitsAccountsWarning`
+and the summary says so, because a before/after comparison only holds with
+the same account state. The bench needs a configured hub URL and management
+key, and may take several minutes.
 
 `/usagemeter version` prints the loaded plugin version and the Git SHA of its
 checkout, or `unknown` when Git metadata is unavailable. It adds `(dirty)` when

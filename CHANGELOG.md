@@ -9,15 +9,25 @@ All notable changes to usagemeter are listed here. The format follows
 ### Added
 
 - `/usagemeter bench` measures cached and cold scans plus hub limit updates,
-  rejects incomplete limits results, and saves timing metadata without account
-  or quota data. Its `warmupMs` value records the first limits update outside
-  the median and p90. `/usagemeter version` prints the loaded plugin version
+  tolerates accounts that error or come back empty, and saves timing metadata
+  without account or quota data. Its `warmupMs` value records the first limits
+  update outside the median and p90. `/usagemeter version` prints the loaded plugin version
   and Git SHA, or `unknown` when Git metadata is unavailable.
 - The Limits tab restarts a stopped local CLIProxyAPI hub before reading: when
   the hub URL is loopback and the connection is refused, the helper starts
   `~/.local/bin/cli-proxy-api` (or `USAGEMETER_HUB_BIN`) with
   `~/.cli-proxy-api/config.yaml` and reads once it answers. Disable with
   `hubAutostart: false` in `/plugin configure usagemeter`.
+
+### Fixed
+
+- `/usagemeter bench` keeps measuring when some hub accounts error or come
+  back empty: the limits phase now fails only when the hub does not answer or
+  when no account returns windows. Every limits round records only the
+  `ok`/`failed` account counts, and the report and summary warn when the
+  counts change between rounds. A missing OpenCode Go key or plan no longer
+  aborts the run, an OpenCode Go plan alone without hub accounts is measured,
+  and short hub keys no longer corrupt the error text.
 
 ## [0.2.0] - 2026-10-05
 

@@ -19,6 +19,11 @@ export interface BenchPhase {
   readonly p90Ms: number;
 }
 
+export interface BenchLimitsCounts {
+  readonly ok: number;
+  readonly failed: number;
+}
+
 export interface BenchReport {
   readonly version: string;
   readonly sha: string;
@@ -37,6 +42,11 @@ export interface BenchReport {
     readonly coldScan: BenchPhase;
     readonly limits: BenchPhase;
   };
+  readonly limitsAccounts: {
+    readonly warmup: BenchLimitsCounts;
+    readonly rounds: readonly BenchLimitsCounts[];
+  };
+  readonly limitsAccountsWarning?: string;
 }
 
 export interface BenchOptions {
@@ -102,7 +112,7 @@ export async function runBench(options: BenchOptions, dependencies: BenchDepende
     const cachedScan = await measure(CACHED_SCAN_ROUNDS, () => scanOnce(cachedCacheDir), monotonicNow, sleep);
     const coldScan = await measure(COLD_SCAN_ROUNDS, () => scanOnce(coldCacheDir), monotonicNow, sleep);
     const openCodeGoEnabled = options.env.USAGEMETER_OPENCODE_GO === "1";
-    const readLimitsSample = async (phase: string) => {
+    const readLimitsSample = async (phase: string): Promise<BenchLimitsCounts> => {
       try {
         const result = await readLimitsForBench({
           nowMs: wallNow().getTime(),
@@ -115,22 +125,26 @@ export async function runBench(options: BenchOptions, dependencies: BenchDepende
         });
         const reason = limitsFailureReason(result, openCodeGoEnabled);
         if (reason) throw new Error(reason);
+        return countLimitsAccounts(result, openCodeGoEnabled);
       } catch (error) {
         const message = error instanceof Error && error.message ? error.message : "The limits request failed.";
         throw new Error(`${phase} failed: ${withoutHubKey(message, hubKey)}`);
       }
     };
     const warmupStartedAt = monotonicNow();
-    await readLimitsSample("Limits warm-up");
+    const warmupAccounts = await readLimitsSample("Limits warm-up");
     const warmupMs = roundMs(monotonicNow() - warmupStartedAt);
     await sleep(LIMITS_INTERVAL_MS);
-    const limits = await measure(
-      LIMITS_ROUNDS,
-      () => readLimitsSample("Limits phase"),
-      monotonicNow,
-      sleep,
-      LIMITS_INTERVAL_MS,
-    );
+    const limitsSamples: number[] = [];
+    const limitsRounds: BenchLimitsCounts[] = [];
+    for (let index = 0; index < LIMITS_ROUNDS; index += 1) {
+      const startedAt = monotonicNow();
+      limitsRounds.push(await readLimitsSample("Limits phase"));
+      limitsSamples.push(roundMs(monotonicNow() - startedAt));
+      if (index < LIMITS_ROUNDS - 1) await sleep(LIMITS_INTERVAL_MS);
+    }
+    const limits: BenchPhase = { samplesMs: limitsSamples, ...summarizeSamples(limitsSamples) };
+    const limitsAccountsWarning = describeLimitsAccounts(warmupAccounts, limitsRounds);
 
     const report: BenchReport = {
       version: options.version,
@@ -146,6 +160,8 @@ export async function runBench(options: BenchOptions, dependencies: BenchDepende
         warmupLimits: 1,
       },
       phases: { cachedScan, coldScan, limits },
+      limitsAccounts: { warmup: warmupAccounts, rounds: limitsRounds },
+      ...(limitsAccountsWarning ? { limitsAccountsWarning } : {}),
     };
     const fileName = `bench-${report.generatedAt.replace(/[:.]/g, "-")}-${randomUUID()}.json`;
     await mkdir(options.reportDir, { recursive: true });
@@ -192,27 +208,34 @@ function limitsFailureReason(result: LimitsOutput, openCodeGoEnabled: boolean): 
   if (result.hub.status !== "ok") {
     return result.hub.message ?? `The hub returned status "${result.hub.status}".`;
   }
-
-  const hubAccounts = result.accounts.filter((account) => account.provider !== "opencode-go");
-  if (hubAccounts.length === 0) {
+  if (countLimitsAccounts(result, openCodeGoEnabled).ok === 0) {
     return "The hub returned no account limit data.";
   }
-  if (hubAccounts.some((account) => account.error || account.windows.length === 0)) {
-    return "The hub returned incomplete account limit data.";
-  }
-
-  if (openCodeGoEnabled) {
-    if (result.openCodeGo.status !== "ok") {
-      return result.openCodeGo.message ?? `OpenCode Go returned status "${result.openCodeGo.status}".`;
-    }
-    if (!result.accounts.some((account) => account.provider === "opencode-go" && account.windows.length > 0)) {
-      return "OpenCode Go returned no limit data.";
-    }
-  }
-
   return undefined;
 }
 
+function countLimitsAccounts(result: LimitsOutput, openCodeGoEnabled: boolean): BenchLimitsCounts {
+  let ok = 0;
+  let failed = 0;
+  for (const account of result.accounts) {
+    if (!account.error && account.windows.length > 0) ok += 1;
+    else failed += 1;
+  }
+  if (openCodeGoEnabled && result.openCodeGo.status === "error") failed += 1;
+  return { ok, failed };
+}
+
+function describeLimitsAccounts(warmup: BenchLimitsCounts, rounds: readonly BenchLimitsCounts[]): string | undefined {
+  const states = new Set(
+    [warmup, ...rounds].map((counts) => `${counts.ok} ok, ${counts.failed} failed`),
+  );
+  if (states.size <= 1) return undefined;
+  return `Limits accounts changed between rounds (${[...states].join("; ")}): compare before/after only with the same account state.`;
+}
+
+const HUB_KEY_MIN_LENGTH = 8;
+
 function withoutHubKey(message: string, hubKey: string): string {
-  return hubKey ? message.replaceAll(hubKey, "[redacted]") : message;
+  if (!hubKey || hubKey.length < HUB_KEY_MIN_LENGTH) return message;
+  return message.split(hubKey).join("[redacted]");
 }

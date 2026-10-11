@@ -3143,15 +3143,20 @@ async function runBench(options, dependencies = {}) {
         }), reason = limitsFailureReason(result, openCodeGoEnabled);
         if (reason)
           throw Error(reason);
+        return countLimitsAccounts(result, openCodeGoEnabled);
       } catch (error) {
         let message = error instanceof Error && error.message ? error.message : "The limits request failed.";
         throw Error(`${phase} failed: ${withoutHubKey(message, hubKey)}`);
       }
-    }, warmupStartedAt = monotonicNow();
-    await readLimitsSample("Limits warm-up");
-    let warmupMs = roundMs(monotonicNow() - warmupStartedAt);
+    }, warmupStartedAt = monotonicNow(), warmupAccounts = await readLimitsSample("Limits warm-up"), warmupMs = roundMs(monotonicNow() - warmupStartedAt);
     await sleep(LIMITS_INTERVAL_MS);
-    let limits = await measure(LIMITS_ROUNDS, () => readLimitsSample("Limits phase"), monotonicNow, sleep, LIMITS_INTERVAL_MS), report = {
+    let limitsSamples = [], limitsRounds = [];
+    for (let index = 0;index < LIMITS_ROUNDS; index += 1) {
+      let startedAt = monotonicNow();
+      if (limitsRounds.push(await readLimitsSample("Limits phase")), limitsSamples.push(roundMs(monotonicNow() - startedAt)), index < LIMITS_ROUNDS - 1)
+        await sleep(LIMITS_INTERVAL_MS);
+    }
+    let limits = { samplesMs: limitsSamples, ...summarizeSamples(limitsSamples) }, limitsAccountsWarning = describeLimitsAccounts(warmupAccounts, limitsRounds), report = {
       version: options.version,
       sha: options.sha,
       dirty: options.dirty,
@@ -3164,7 +3169,9 @@ async function runBench(options, dependencies = {}) {
         warmupScans: 1,
         warmupLimits: 1
       },
-      phases: { cachedScan, coldScan, limits }
+      phases: { cachedScan, coldScan, limits },
+      limitsAccounts: { warmup: warmupAccounts, rounds: limitsRounds },
+      ...limitsAccountsWarning ? { limitsAccountsWarning } : {}
     }, fileName = `bench-${report.generatedAt.replace(/[:.]/g, "-")}-${randomUUID()}.json`;
     return await mkdir3(options.reportDir, { recursive: !0 }), await writeReport(path5.join(options.reportDir, fileName), report), { report, reportDir: options.reportDir, fileName };
   } finally {
@@ -3195,21 +3202,32 @@ function roundMs(value) {
 function limitsFailureReason(result, openCodeGoEnabled) {
   if (result.hub.status !== "ok")
     return result.hub.message ?? `The hub returned status "${result.hub.status}".`;
-  let hubAccounts = result.accounts.filter((account) => account.provider !== "opencode-go");
-  if (hubAccounts.length === 0)
+  if (countLimitsAccounts(result, openCodeGoEnabled).ok === 0)
     return "The hub returned no account limit data.";
-  if (hubAccounts.some((account) => account.error || account.windows.length === 0))
-    return "The hub returned incomplete account limit data.";
-  if (openCodeGoEnabled) {
-    if (result.openCodeGo.status !== "ok")
-      return result.openCodeGo.message ?? `OpenCode Go returned status "${result.openCodeGo.status}".`;
-    if (!result.accounts.some((account) => account.provider === "opencode-go" && account.windows.length > 0))
-      return "OpenCode Go returned no limit data.";
-  }
   return;
 }
+function countLimitsAccounts(result, openCodeGoEnabled) {
+  let ok = 0, failed = 0;
+  for (let account of result.accounts)
+    if (!account.error && account.windows.length > 0)
+      ok += 1;
+    else
+      failed += 1;
+  if (openCodeGoEnabled && result.openCodeGo.status === "error")
+    failed += 1;
+  return { ok, failed };
+}
+function describeLimitsAccounts(warmup, rounds) {
+  let states = new Set([warmup, ...rounds].map((counts) => `${counts.ok} ok, ${counts.failed} failed`));
+  if (states.size <= 1)
+    return;
+  return `Limits accounts changed between rounds (${[...states].join("; ")}): compare before/after only with the same account state.`;
+}
+var HUB_KEY_MIN_LENGTH = 8;
 function withoutHubKey(message, hubKey) {
-  return hubKey ? message.replaceAll(hubKey, "[redacted]") : message;
+  if (!hubKey || hubKey.length < HUB_KEY_MIN_LENGTH)
+    return message;
+  return message.split(hubKey).join("[redacted]");
 }
 
 // helper/src/version.ts
@@ -3282,6 +3300,8 @@ async function main(argv) {
       generatedAt: result.report.generatedAt,
       rounds: result.report.rounds,
       phases: result.report.phases,
+      limitsAccounts: result.report.limitsAccounts,
+      ...result.report.limitsAccountsWarning ? { limitsAccountsWarning: result.report.limitsAccountsWarning } : {},
       reportFile: result.fileName
     }), 0;
   }

@@ -91,8 +91,13 @@ test("bench measures isolated scan caches and saves timing metadata only", async
 
     const saved = await readFile(path.join(result.reportDir, result.fileName), "utf8");
     const document = JSON.parse(saved);
-    assert.deepEqual(Object.keys(document).sort(), ["dirty", "generatedAt", "phases", "rounds", "sha", "version", "warmupMs"]);
+    assert.deepEqual(Object.keys(document).sort(), ["dirty", "generatedAt", "limitsAccounts", "phases", "rounds", "sha", "version", "warmupMs"]);
     assert.equal(document.warmupMs, 5_000);
+    assert.deepEqual(document.limitsAccounts, {
+      warmup: { ok: 1, failed: 0 },
+      rounds: Array(10).fill({ ok: 1, failed: 0 }),
+    });
+    assert.ok(!("limitsAccountsWarning" in document));
     const phases = document.phases as Record<string, Record<string, unknown>>;
     for (const phase of Object.values(phases)) {
       assert.deepEqual(Object.keys(phase).sort(), ["medianMs", "p90Ms", "samplesMs"]);
@@ -101,6 +106,8 @@ test("bench measures isolated scan caches and saves timing metadata only", async
     assert.ok(!saved.includes("quotaPercent"));
     assert.ok(!saved.includes("usedPercent"));
     assert.ok(!saved.includes("test-only-value"));
+    assert.ok(!saved.includes("codex"));
+    assert.ok(!saved.includes("primary"));
     assert.match(result.fileName, /^bench-2026-10-11T12-30-00-000Z-[0-9a-f-]{36}\.json$/);
 
     const temporaryScanRoot = path.dirname(scanCalls[0]!.cacheDir);
@@ -231,8 +238,50 @@ test("bench rejects a hub response without limit data", async () => {
   }
 });
 
-test("bench rejects partial hub account limits", async () => {
+test("bench tolerates a hub account error when another account has data", async () => {
   const home = await mkdtemp(path.join(os.tmpdir(), "usagemeter-bench-partial-hub-test-"));
+  const reportDir = path.join(home, "reports");
+  try {
+    const result = await runBench({
+      reportDir,
+      tempDir: home,
+      env: { USAGEMETER_HUB_URL: "http://localhost:8317", USAGEMETER_HUB_KEY: "k" },
+      version: "0.2.0",
+      sha: "abcdef012345",
+      dirty: false,
+    }, {
+      loadRates: async () => ({ table: new Map(), status: "unavailable", fetchedAtMs: null }),
+      scan: async () => ({}),
+      readLimits: async () => ({
+        accounts: [
+          { provider: "codex", label: "sample-account", windows: [
+            { id: "primary", label: "Session", kind: "session", usedPercent: 73 },
+          ] },
+          { provider: "claude", label: "sample-account", windows: [], error: "The hub answered HTTP 401." },
+        ],
+        hub: { status: "ok" },
+        openCodeGo: { status: "off" },
+      }),
+      monotonicNow: () => 0,
+      wallNow: () => new Date("2026-10-11T12:30:00.000Z"),
+      sleep: async () => {},
+    });
+    assert.deepEqual(result.report.limitsAccounts, {
+      warmup: { ok: 1, failed: 1 },
+      rounds: Array(10).fill({ ok: 1, failed: 1 }),
+    });
+    assert.ok(!("limitsAccountsWarning" in result.report));
+    const saved = JSON.parse(await readFile(path.join(result.reportDir, result.fileName), "utf8"));
+    assert.ok(!saved.limitsAccounts.rounds.some((counts: { ok: number }) => typeof counts.ok !== "number"));
+    assert.ok(!JSON.stringify(saved).includes("sample-account"));
+    assert.ok(!JSON.stringify(saved).includes("claude"));
+  } finally {
+    await rm(home, { recursive: true, force: true });
+  }
+});
+
+test("bench fails when every account errors and none returns windows", async () => {
+  const home = await mkdtemp(path.join(os.tmpdir(), "usagemeter-bench-all-failed-test-"));
   const reportDir = path.join(home, "reports");
   try {
     await assert.rejects(
@@ -248,9 +297,7 @@ test("bench rejects partial hub account limits", async () => {
         scan: async () => ({}),
         readLimits: async () => ({
           accounts: [
-            { provider: "codex", label: "sample-account", windows: [
-              { id: "primary", label: "Session", kind: "session", usedPercent: 73 },
-            ] },
+            { provider: "codex", label: "sample-account", windows: [], error: "The hub answered HTTP 401." },
             { provider: "claude", label: "sample-account", windows: [], error: "The hub answered HTTP 401." },
           ],
           hub: { status: "ok" },
@@ -260,7 +307,7 @@ test("bench rejects partial hub account limits", async () => {
         wallNow: () => new Date("2026-10-11T12:30:00.000Z"),
         sleep: async () => {},
       }),
-      /Limits warm-up failed: The hub returned incomplete account limit data\./,
+      /Limits warm-up failed: The hub returned no account limit data\./,
     );
     await assert.rejects(access(reportDir));
   } finally {
@@ -268,37 +315,179 @@ test("bench rejects partial hub account limits", async () => {
   }
 });
 
-test("bench rejects a failed configured OpenCode Go limits source", async () => {
+test("bench ignores an unsupported OpenCode Go source when the hub has data", async () => {
+  const home = await mkdtemp(path.join(os.tmpdir(), "usagemeter-bench-opencode-unsupported-test-"));
+  try {
+    const result = await runBench({
+      reportDir: path.join(home, "reports"),
+      tempDir: home,
+      env: {
+        USAGEMETER_HUB_URL: "http://localhost:8317",
+        USAGEMETER_HUB_KEY: "k",
+        USAGEMETER_OPENCODE_GO: "1",
+      },
+      version: "0.2.0",
+      sha: "abcdef012345",
+      dirty: false,
+    }, {
+      loadRates: async () => ({ table: new Map(), status: "unavailable", fetchedAtMs: null }),
+      scan: async () => ({}),
+      readLimits: async () => ({
+        accounts: [{ provider: "codex", label: "sample-account", windows: [
+          { id: "primary", label: "Session", kind: "session", usedPercent: 73 },
+        ] }],
+        hub: { status: "ok" },
+        openCodeGo: { status: "unsupported", message: "No OpenCode Go key found." },
+      }),
+      monotonicNow: () => 0,
+      wallNow: () => new Date("2026-10-11T12:30:00.000Z"),
+      sleep: async () => {},
+    });
+    assert.deepEqual(result.report.limitsAccounts.warmup, { ok: 1, failed: 0 });
+  } finally {
+    await rm(home, { recursive: true, force: true });
+  }
+});
+
+test("bench measures OpenCode Go alone when the hub holds no Codex, Claude or Antigravity account", async () => {
+  const home = await mkdtemp(path.join(os.tmpdir(), "usagemeter-bench-go-only-test-"));
+  try {
+    const result = await runBench({
+      reportDir: path.join(home, "reports"),
+      tempDir: home,
+      env: {
+        USAGEMETER_HUB_URL: "http://localhost:8317",
+        USAGEMETER_HUB_KEY: "k",
+        USAGEMETER_OPENCODE_GO: "1",
+      },
+      version: "0.2.0",
+      sha: "abcdef012345",
+      dirty: false,
+    }, {
+      loadRates: async () => ({ table: new Map(), status: "unavailable", fetchedAtMs: null }),
+      scan: async () => ({}),
+      readLimits: async () => ({
+        accounts: [{ provider: "opencode-go", label: "OpenCode Go", windows: [
+          { id: "go_weekly", label: "Go · Weekly", kind: "weekly", usedPercent: 11 },
+        ] }],
+        hub: { status: "ok" },
+        openCodeGo: { status: "ok" },
+      }),
+      monotonicNow: () => 0,
+      wallNow: () => new Date("2026-10-11T12:30:00.000Z"),
+      sleep: async () => {},
+    });
+    assert.deepEqual(result.report.limitsAccounts.warmup, { ok: 1, failed: 0 });
+  } finally {
+    await rm(home, { recursive: true, force: true });
+  }
+});
+
+test("bench tolerates a failed OpenCode Go source when the hub has data", async () => {
   const home = await mkdtemp(path.join(os.tmpdir(), "usagemeter-bench-opencode-error-test-"));
+  try {
+    const result = await runBench({
+      reportDir: path.join(home, "reports"),
+      tempDir: home,
+      env: {
+        USAGEMETER_HUB_URL: "http://localhost:8317",
+        USAGEMETER_HUB_KEY: "k",
+        USAGEMETER_OPENCODE_GO: "1",
+      },
+      version: "0.2.0",
+      sha: "abcdef012345",
+      dirty: false,
+    }, {
+      loadRates: async () => ({ table: new Map(), status: "unavailable", fetchedAtMs: null }),
+      scan: async () => ({}),
+      readLimits: async () => ({
+        accounts: [{ provider: "codex", label: "sample-account", windows: [
+          { id: "primary", label: "Session", kind: "session", usedPercent: 73 },
+        ] }],
+        hub: { status: "ok" },
+        openCodeGo: { status: "error", message: "OpenCode Go could not be read." },
+      }),
+      monotonicNow: () => 0,
+      wallNow: () => new Date("2026-10-11T12:30:00.000Z"),
+      sleep: async () => {},
+    });
+    assert.deepEqual(result.report.limitsAccounts.warmup, { ok: 1, failed: 1 });
+  } finally {
+    await rm(home, { recursive: true, force: true });
+  }
+});
+
+test("bench warns when the account counts change between rounds", async () => {
+  const home = await mkdtemp(path.join(os.tmpdir(), "usagemeter-bench-flapping-test-"));
+  try {
+    let calls = 0;
+    const result = await runBench({
+      reportDir: path.join(home, "reports"),
+      tempDir: home,
+      env: { USAGEMETER_HUB_URL: "http://localhost:8317", USAGEMETER_HUB_KEY: "k" },
+      version: "0.2.0",
+      sha: "abcdef012345",
+      dirty: false,
+    }, {
+      loadRates: async () => ({ table: new Map(), status: "unavailable", fetchedAtMs: null }),
+      scan: async () => ({}),
+      readLimits: async () => {
+        calls += 1;
+        const two = calls > 5;
+        return {
+          accounts: [
+            { provider: "codex", label: "sample-account", windows: [
+              { id: "primary", label: "Session", kind: "session", usedPercent: 73 },
+            ] },
+            ...(two ? [{ provider: "claude" as const, label: "sample-account", windows: [
+              { id: "five_hour", label: "Session", kind: "session" as const, usedPercent: 12 },
+            ] }] : []),
+          ],
+          hub: { status: "ok" as const },
+          openCodeGo: { status: "off" as const },
+        };
+      },
+      monotonicNow: () => 0,
+      wallNow: () => new Date("2026-10-11T12:30:00.000Z"),
+      sleep: async () => {},
+    });
+    assert.equal(result.report.limitsAccounts.rounds.length, 10);
+    assert.match(result.report.limitsAccountsWarning ?? "", /changed between rounds/);
+    const saved = JSON.parse(await readFile(path.join(result.reportDir, result.fileName), "utf8"));
+    assert.match(saved.limitsAccountsWarning, /changed between rounds/);
+    assert.ok(!JSON.stringify(saved).includes("sample-account"));
+  } finally {
+    await rm(home, { recursive: true, force: true });
+  }
+});
+
+test("bench keeps a short hub key from corrupting the error message", async () => {
+  const home = await mkdtemp(path.join(os.tmpdir(), "usagemeter-bench-short-key-test-"));
   const reportDir = path.join(home, "reports");
   try {
     await assert.rejects(
       runBench({
         reportDir,
         tempDir: home,
-        env: {
-          USAGEMETER_HUB_URL: "http://localhost:8317",
-          USAGEMETER_HUB_KEY: "k",
-          USAGEMETER_OPENCODE_GO: "1",
-        },
+        env: { USAGEMETER_HUB_URL: "http://localhost:8317", USAGEMETER_HUB_KEY: "k" },
         version: "0.2.0",
         sha: "abcdef012345",
         dirty: false,
       }, {
         loadRates: async () => ({ table: new Map(), status: "unavailable", fetchedAtMs: null }),
         scan: async () => ({}),
-        readLimits: async () => ({
-          accounts: [{ provider: "codex", label: "sample-account", windows: [
-            { id: "primary", label: "Session", kind: "session", usedPercent: 73 },
-          ] }],
-          hub: { status: "ok" },
-          openCodeGo: { status: "error", message: "OpenCode Go could not be read." },
-        }),
+        readLimits: async () => {
+          throw new Error("disk k full");
+        },
         monotonicNow: () => 0,
         wallNow: () => new Date("2026-10-11T12:30:00.000Z"),
         sleep: async () => {},
       }),
-      /Limits warm-up failed: OpenCode Go could not be read\./,
+      (error: unknown) => {
+        assert.ok(error instanceof Error);
+        assert.equal(error.message, "Limits warm-up failed: disk k full");
+        return true;
+      },
     );
     await assert.rejects(access(reportDir));
   } finally {

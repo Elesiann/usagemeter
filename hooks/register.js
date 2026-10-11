@@ -190,15 +190,18 @@ export function register(on, options) {
       const doc = parseOutput(result.stdout)
       if (result.exitCode !== 0 || !doc?.phases || !doc.reportFile) return { text: failure(result, doc) }
       const { cachedScan, coldScan, limits: limitsPhase } = doc.phases
-      return {
-        text: [
-          'Bench complete. Saved ' + doc.reportFile + '.',
-          'Cached scan median: ' + cachedScan.medianMs + ' ms; p90: ' + cachedScan.p90Ms + ' ms.',
-          'Cold scan median: ' + coldScan.medianMs + ' ms; p90: ' + coldScan.p90Ms + ' ms.',
-          'Limits warm-up: ' + doc.warmupMs + ' ms.',
-          'Limits median: ' + limitsPhase.medianMs + ' ms; p90: ' + limitsPhase.p90Ms + ' ms.',
-        ].join('\n'),
+      const lines = [
+        'Bench complete. Saved ' + doc.reportFile + '.',
+        'Cached scan median: ' + cachedScan.medianMs + ' ms; p90: ' + cachedScan.p90Ms + ' ms.',
+        'Cold scan median: ' + coldScan.medianMs + ' ms; p90: ' + coldScan.p90Ms + ' ms.',
+        'Limits warm-up: ' + doc.warmupMs + ' ms.',
+        'Limits median: ' + limitsPhase.medianMs + ' ms; p90: ' + limitsPhase.p90Ms + ' ms.',
+      ]
+      if (doc.limitsAccounts) {
+        lines.push('Limits accounts (warm-up): ' + doc.limitsAccounts.warmup.ok + ' ok, ' + doc.limitsAccounts.warmup.failed + ' failed.')
       }
+      if (doc.limitsAccountsWarning) lines.push('Warning: ' + doc.limitsAccountsWarning)
+      return { text: lines.join('\n') }
     }
     await $.ui.open({ id: PANE, title: 'Usage meter', focus: true, closeOnEscape: true, columns: 150 })
     refresh($, args === 'refresh')
