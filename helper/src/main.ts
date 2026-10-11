@@ -76,6 +76,7 @@ async function main(argv: readonly string[]): Promise<number> {
       appVersion: result.report.version,
       sha: result.report.sha,
       dirty: result.report.dirty,
+      warmupMs: result.report.warmupMs,
       generatedAt: result.report.generatedAt,
       rounds: result.report.rounds,
       phases: result.report.phases,

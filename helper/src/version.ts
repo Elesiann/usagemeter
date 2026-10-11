@@ -25,6 +25,6 @@ export async function readVersionMetadata(pluginRoot: string): Promise<VersionMe
     const dirty = git(["status", "--porcelain", "--untracked-files=all"]).length > 0;
     return { version: manifest.version, sha, dirty };
   } catch {
-    throw new Error("Could not identify the loaded plugin's Git commit.");
+    return { version: manifest.version, sha: "unknown", dirty: false };
   }
 }

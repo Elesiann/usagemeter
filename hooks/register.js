@@ -195,6 +195,7 @@ export function register(on, options) {
           'Bench complete. Saved ' + doc.reportFile + '.',
           'Cached scan median: ' + cachedScan.medianMs + ' ms; p90: ' + cachedScan.p90Ms + ' ms.',
           'Cold scan median: ' + coldScan.medianMs + ' ms; p90: ' + coldScan.p90Ms + ' ms.',
+          'Limits warm-up: ' + doc.warmupMs + ' ms.',
           'Limits median: ' + limitsPhase.medianMs + ' ms; p90: ' + limitsPhase.p90Ms + ' ms.',
         ].join('\n'),
       }

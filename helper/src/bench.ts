@@ -4,7 +4,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { performance } from "node:perf_hooks";
 
-import { readLimits, type LimitsOptions } from "./limits.ts";
+import { readLimits, type LimitsOptions, type LimitsOutput } from "./limits.ts";
 import { loadRates } from "./rates.ts";
 import { scan, type ScanOptions } from "./scan.ts";
 
@@ -23,12 +23,14 @@ export interface BenchReport {
   readonly version: string;
   readonly sha: string;
   readonly dirty: boolean;
+  readonly warmupMs: number;
   readonly generatedAt: string;
   readonly rounds: {
     readonly cachedScan: number;
     readonly coldScan: number;
     readonly limits: number;
     readonly warmupScans: number;
+    readonly warmupLimits: number;
   };
   readonly phases: {
     readonly cachedScan: BenchPhase;
@@ -49,7 +51,7 @@ export interface BenchOptions {
 export interface BenchDependencies {
   readonly loadRates?: typeof loadRates;
   readonly scan?: (options: ScanOptions) => Promise<unknown>;
-  readonly readLimits?: (options: LimitsOptions) => Promise<unknown>;
+  readonly readLimits?: (options: LimitsOptions) => Promise<LimitsOutput>;
   readonly monotonicNow?: () => number;
   readonly wallNow?: () => Date;
   readonly sleep?: (ms: number) => Promise<void>;
@@ -99,26 +101,49 @@ export async function runBench(options: BenchOptions, dependencies: BenchDepende
     await scanOnce(cachedCacheDir);
     const cachedScan = await measure(CACHED_SCAN_ROUNDS, () => scanOnce(cachedCacheDir), monotonicNow, sleep);
     const coldScan = await measure(COLD_SCAN_ROUNDS, () => scanOnce(coldCacheDir), monotonicNow, sleep);
-    const limits = await measure(LIMITS_ROUNDS, () => readLimitsForBench({
-      nowMs: wallNow().getTime(),
-      hubUrl,
-      hubKey,
-      openCodeGo: options.env.USAGEMETER_OPENCODE_GO === "1",
-      hubAutostart: options.env.USAGEMETER_HUB_AUTOSTART === "1",
-      ...(options.env.USAGEMETER_HUB_BIN?.trim() ? { hubBin: options.env.USAGEMETER_HUB_BIN.trim() } : {}),
-      env: options.env,
-    }), monotonicNow, sleep, LIMITS_INTERVAL_MS);
+    const openCodeGoEnabled = options.env.USAGEMETER_OPENCODE_GO === "1";
+    const readLimitsSample = async (phase: string) => {
+      try {
+        const result = await readLimitsForBench({
+          nowMs: wallNow().getTime(),
+          hubUrl,
+          hubKey,
+          openCodeGo: openCodeGoEnabled,
+          hubAutostart: options.env.USAGEMETER_HUB_AUTOSTART === "1",
+          ...(options.env.USAGEMETER_HUB_BIN?.trim() ? { hubBin: options.env.USAGEMETER_HUB_BIN.trim() } : {}),
+          env: options.env,
+        });
+        const reason = limitsFailureReason(result, openCodeGoEnabled);
+        if (reason) throw new Error(reason);
+      } catch (error) {
+        const message = error instanceof Error && error.message ? error.message : "The limits request failed.";
+        throw new Error(`${phase} failed: ${withoutHubKey(message, hubKey)}`);
+      }
+    };
+    const warmupStartedAt = monotonicNow();
+    await readLimitsSample("Limits warm-up");
+    const warmupMs = roundMs(monotonicNow() - warmupStartedAt);
+    await sleep(LIMITS_INTERVAL_MS);
+    const limits = await measure(
+      LIMITS_ROUNDS,
+      () => readLimitsSample("Limits phase"),
+      monotonicNow,
+      sleep,
+      LIMITS_INTERVAL_MS,
+    );
 
     const report: BenchReport = {
       version: options.version,
       sha: options.sha,
       dirty: options.dirty,
+      warmupMs,
       generatedAt: wallNow().toISOString(),
       rounds: {
         cachedScan: CACHED_SCAN_ROUNDS,
         coldScan: COLD_SCAN_ROUNDS,
         limits: LIMITS_ROUNDS,
         warmupScans: 1,
+        warmupLimits: 1,
       },
       phases: { cachedScan, coldScan, limits },
     };
@@ -161,4 +186,30 @@ async function writeReport(file: string, report: BenchReport): Promise<void> {
 
 function roundMs(value: number): number {
   return Math.round(value * 1_000) / 1_000;
+}
+
+function limitsFailureReason(result: LimitsOutput, openCodeGoEnabled: boolean): string | undefined {
+  if (result.hub.status !== "ok") {
+    return result.hub.message ?? `The hub returned status "${result.hub.status}".`;
+  }
+
+  const hubAccounts = result.accounts.filter((account) => account.provider !== "opencode-go");
+  if (!hubAccounts.some((account) => account.windows.length > 0)) {
+    return "The hub returned no account limit data.";
+  }
+
+  if (openCodeGoEnabled) {
+    if (result.openCodeGo.status !== "ok") {
+      return result.openCodeGo.message ?? `OpenCode Go returned status "${result.openCodeGo.status}".`;
+    }
+    if (!result.accounts.some((account) => account.provider === "opencode-go" && account.windows.length > 0)) {
+      return "OpenCode Go returned no limit data.";
+    }
+  }
+
+  return undefined;
+}
+
+function withoutHubKey(message: string, hubKey: string): string {
+  return hubKey ? message.replaceAll(hubKey, "[redacted]") : message;
 }

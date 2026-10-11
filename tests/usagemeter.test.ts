@@ -108,7 +108,7 @@ test('/usagemeter version shows the loaded plugin version and SHA', async ($, on
   const runs: string[][] = []
   on('process.run', ($: unknown, e: any) => {
     runs.push(e.argv)
-    return { value: { exitCode: 0, stdout: JSON.stringify({ version: 1, appVersion: '0.2.0', sha: 'abcdef012345', dirty: false }) + '\n', stderr: '' } }
+    return { value: { exitCode: 0, stdout: JSON.stringify({ version: 1, appVersion: '0.2.0', sha: 'unknown', dirty: false }) + '\n', stderr: '' } }
   })
 
   await $.session.start({ surface: 'terminal', isInteractive: true, cwd: '/work' })
@@ -117,8 +117,7 @@ test('/usagemeter version shows the loaded plugin version and SHA', async ($, on
   expect(runs).toHaveLength(1)
   expect(runs[0]!.at(-1)).toBe('version')
   expect(result.text).toContain('0.2.0')
-  expect(result.text).toContain('sha abcdef012345')
-  expect(result.text).toContain('abcdef012345')
+  expect(result.text).toContain('sha unknown')
 })
 
 test('/usagemeter bench passes the hub key only through the helper environment', { options: { hubUrl: 'http://localhost:8317', hubKey: 'test-only-value', openCodeGo: true } }, async ($, on) => {
@@ -133,6 +132,7 @@ test('/usagemeter bench passes the hub key only through the helper environment',
       appVersion: '0.2.0',
       sha: 'abcdef012345',
       dirty: false,
+      warmupMs: 3000,
       reportFile: 'bench-2026-10-11T12-30-00-000Z.json',
       phases: {
         cachedScan: { medianMs: 12, p90Ms: 16 },
@@ -156,7 +156,25 @@ test('/usagemeter bench passes the hub key only through the helper environment',
   })
   expect(result.text).toContain('Cached scan median: 12 ms')
   expect(result.text).toContain('Cold scan median: 240 ms')
+  expect(result.text).toContain('Limits warm-up: 3000 ms')
   expect(result.text).toContain('Limits median: 3500 ms')
+  expect(result.text).not.toContain('test-only-value')
+})
+
+test('/usagemeter bench reports a failed limits phase without exposing the hub key', { options: { hubUrl: 'http://localhost:8317', hubKey: 'test-only-value' } }, async ($, on) => {
+  on('store.get', () => ({ value: undefined }))
+  on('command.register', () => ({ value: undefined }))
+  on('session.start', () => ({ cwd: '/work' }))
+  on('process.run', () => ({ value: {
+    exitCode: 1,
+    stdout: JSON.stringify({ version: 1, error: 'Limits warm-up failed: The hub could not be reached (ECONNREFUSED).' }) + '\n',
+    stderr: '',
+  } }))
+
+  await $.session.start({ surface: 'terminal', isInteractive: true, cwd: '/work' })
+  const result = await $.command.run({ command: 'usagemeter', args: 'bench' })
+
+  expect(result.text).toContain('Limits warm-up failed: The hub could not be reached')
   expect(result.text).not.toContain('test-only-value')
 })
 

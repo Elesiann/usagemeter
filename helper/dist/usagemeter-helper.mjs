@@ -3130,24 +3130,39 @@ async function runBench(options, dependencies = {}) {
       return scanForBench({ nowMs, timeZone, rates: rates.table, cacheDir, env: options.env });
     };
     await scanOnce(cachedCacheDir);
-    let cachedScan = await measure(CACHED_SCAN_ROUNDS, () => scanOnce(cachedCacheDir), monotonicNow, sleep), coldScan = await measure(COLD_SCAN_ROUNDS, () => scanOnce(coldCacheDir), monotonicNow, sleep), limits = await measure(LIMITS_ROUNDS, () => readLimitsForBench({
-      nowMs: wallNow().getTime(),
-      hubUrl,
-      hubKey,
-      openCodeGo: options.env.USAGEMETER_OPENCODE_GO === "1",
-      hubAutostart: options.env.USAGEMETER_HUB_AUTOSTART === "1",
-      ...options.env.USAGEMETER_HUB_BIN?.trim() ? { hubBin: options.env.USAGEMETER_HUB_BIN.trim() } : {},
-      env: options.env
-    }), monotonicNow, sleep, LIMITS_INTERVAL_MS), report = {
+    let cachedScan = await measure(CACHED_SCAN_ROUNDS, () => scanOnce(cachedCacheDir), monotonicNow, sleep), coldScan = await measure(COLD_SCAN_ROUNDS, () => scanOnce(coldCacheDir), monotonicNow, sleep), openCodeGoEnabled = options.env.USAGEMETER_OPENCODE_GO === "1", readLimitsSample = async (phase) => {
+      try {
+        let result = await readLimitsForBench({
+          nowMs: wallNow().getTime(),
+          hubUrl,
+          hubKey,
+          openCodeGo: openCodeGoEnabled,
+          hubAutostart: options.env.USAGEMETER_HUB_AUTOSTART === "1",
+          ...options.env.USAGEMETER_HUB_BIN?.trim() ? { hubBin: options.env.USAGEMETER_HUB_BIN.trim() } : {},
+          env: options.env
+        }), reason = limitsFailureReason(result, openCodeGoEnabled);
+        if (reason)
+          throw Error(reason);
+      } catch (error) {
+        let message = error instanceof Error && error.message ? error.message : "The limits request failed.";
+        throw Error(`${phase} failed: ${withoutHubKey(message, hubKey)}`);
+      }
+    }, warmupStartedAt = monotonicNow();
+    await readLimitsSample("Limits warm-up");
+    let warmupMs = roundMs(monotonicNow() - warmupStartedAt);
+    await sleep(LIMITS_INTERVAL_MS);
+    let limits = await measure(LIMITS_ROUNDS, () => readLimitsSample("Limits phase"), monotonicNow, sleep, LIMITS_INTERVAL_MS), report = {
       version: options.version,
       sha: options.sha,
       dirty: options.dirty,
+      warmupMs,
       generatedAt: wallNow().toISOString(),
       rounds: {
         cachedScan: CACHED_SCAN_ROUNDS,
         coldScan: COLD_SCAN_ROUNDS,
         limits: LIMITS_ROUNDS,
-        warmupScans: 1
+        warmupScans: 1,
+        warmupLimits: 1
       },
       phases: { cachedScan, coldScan, limits }
     }, fileName = `bench-${report.generatedAt.replace(/[:.]/g, "-")}-${randomUUID()}.json`;
@@ -3177,6 +3192,22 @@ async function writeReport(file, report) {
 function roundMs(value) {
   return Math.round(value * 1000) / 1000;
 }
+function limitsFailureReason(result, openCodeGoEnabled) {
+  if (result.hub.status !== "ok")
+    return result.hub.message ?? `The hub returned status "${result.hub.status}".`;
+  if (!result.accounts.filter((account) => account.provider !== "opencode-go").some((account) => account.windows.length > 0))
+    return "The hub returned no account limit data.";
+  if (openCodeGoEnabled) {
+    if (result.openCodeGo.status !== "ok")
+      return result.openCodeGo.message ?? `OpenCode Go returned status "${result.openCodeGo.status}".`;
+    if (!result.accounts.some((account) => account.provider === "opencode-go" && account.windows.length > 0))
+      return "OpenCode Go returned no limit data.";
+  }
+  return;
+}
+function withoutHubKey(message, hubKey) {
+  return hubKey ? message.replaceAll(hubKey, "[redacted]") : message;
+}
 
 // helper/src/version.ts
 import { execFileSync } from "node:child_process";
@@ -3190,7 +3221,7 @@ async function readVersionMetadata(pluginRoot) {
     let git = (args) => execFileSync("git", ["-C", pluginRoot, ...args], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim(), sha = git(["rev-parse", "--short=12", "HEAD"]), dirty = git(["status", "--porcelain", "--untracked-files=all"]).length > 0;
     return { version: manifest.version, sha, dirty };
   } catch {
-    throw Error("Could not identify the loaded plugin's Git commit.");
+    return { version: manifest.version, sha: "unknown", dirty: !1 };
   }
 }
 
@@ -3244,6 +3275,7 @@ async function main(argv) {
       appVersion: result.report.version,
       sha: result.report.sha,
       dirty: result.report.dirty,
+      warmupMs: result.report.warmupMs,
       generatedAt: result.report.generatedAt,
       rounds: result.report.rounds,
       phases: result.report.phases,
