@@ -101,6 +101,65 @@ test('/usagemeter scans, reads limits with the key in the environment, and draws
   expect(await ui.find({ type: 'Text', text: 'Daily cost' })).toBeDefined()
 })
 
+test('/usagemeter version shows the loaded plugin version and SHA', async ($, on) => {
+  on('store.get', () => ({ value: undefined }))
+  on('command.register', () => ({ value: undefined }))
+  on('session.start', () => ({ cwd: '/work' }))
+  const runs: string[][] = []
+  on('process.run', ($: unknown, e: any) => {
+    runs.push(e.argv)
+    return { value: { exitCode: 0, stdout: JSON.stringify({ version: 1, appVersion: '0.2.0', sha: 'abcdef012345', dirty: false }) + '\n', stderr: '' } }
+  })
+
+  await $.session.start({ surface: 'terminal', isInteractive: true, cwd: '/work' })
+  const result = await $.command.run({ command: 'usagemeter', args: 'version' })
+
+  expect(runs).toHaveLength(1)
+  expect(runs[0]!.at(-1)).toBe('version')
+  expect(result.text).toContain('0.2.0')
+  expect(result.text).toContain('sha abcdef012345')
+  expect(result.text).toContain('abcdef012345')
+})
+
+test('/usagemeter bench passes the hub key only through the helper environment', { options: { hubUrl: 'http://localhost:8317', hubKey: 'test-only-value', openCodeGo: true } }, async ($, on) => {
+  on('store.get', () => ({ value: undefined }))
+  on('command.register', () => ({ value: undefined }))
+  on('session.start', () => ({ cwd: '/work' }))
+  const runs: { argv: string[]; env?: Record<string, string> }[] = []
+  on('process.run', ($: unknown, e: any) => {
+    runs.push({ argv: e.argv, env: e.init?.env })
+    const report = {
+      version: 1,
+      appVersion: '0.2.0',
+      sha: 'abcdef012345',
+      dirty: false,
+      reportFile: 'bench-2026-10-11T12-30-00-000Z.json',
+      phases: {
+        cachedScan: { medianMs: 12, p90Ms: 16 },
+        coldScan: { medianMs: 240, p90Ms: 240 },
+        limits: { medianMs: 3500, p90Ms: 4100 },
+      },
+    }
+    return { value: { exitCode: 0, stdout: JSON.stringify(report) + '\n', stderr: '' } }
+  })
+
+  await $.session.start({ surface: 'terminal', isInteractive: true, cwd: '/work' })
+  const result = await $.command.run({ command: 'usagemeter', args: 'bench' })
+
+  expect(runs).toHaveLength(1)
+  expect(runs[0]!.argv.at(-1)).toBe('bench')
+  expect(runs[0]!.argv.join(' ')).not.toContain('test-only-value')
+  expect(runs[0]!.env).toMatchObject({
+    USAGEMETER_HUB_URL: 'http://localhost:8317',
+    USAGEMETER_HUB_KEY: 'test-only-value',
+    USAGEMETER_OPENCODE_GO: '1',
+  })
+  expect(result.text).toContain('Cached scan median: 12 ms')
+  expect(result.text).toContain('Cold scan median: 240 ms')
+  expect(result.text).toContain('Limits median: 3500 ms')
+  expect(result.text).not.toContain('test-only-value')
+})
+
 test('keys switch tab, range and grouping', async ($, on) => {
   stubs(on, [])
   await $.session.start({ surface: 'terminal', isInteractive: true, cwd: '/work' })

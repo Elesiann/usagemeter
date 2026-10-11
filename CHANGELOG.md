@@ -8,6 +8,9 @@ All notable changes to usagemeter are listed here. The format follows
 
 ### Added
 
+- `/usagemeter bench` measures cached and cold scans plus hub limit updates,
+  and saves timing metadata without account or quota data. `/usagemeter version`
+  prints the loaded plugin version and Git SHA.
 - The Limits tab restarts a stopped local CLIProxyAPI hub before reading: when
   the hub URL is loopback and the connection is refused, the helper starts
   `~/.local/bin/cli-proxy-api` (or `USAGEMETER_HUB_BIN`) with
