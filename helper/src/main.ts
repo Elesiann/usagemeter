@@ -80,6 +80,8 @@ async function main(argv: readonly string[]): Promise<number> {
       generatedAt: result.report.generatedAt,
       rounds: result.report.rounds,
       phases: result.report.phases,
+      limitsAccounts: result.report.limitsAccounts,
+      ...(result.report.limitsAccountsWarning ? { limitsAccountsWarning: result.report.limitsAccountsWarning } : {}),
       reportFile: result.fileName,
     });
     return 0;

@@ -161,8 +161,41 @@ test('/usagemeter bench passes the hub key only through the helper environment',
   expect(result.text).not.toContain('test-only-value')
 })
 
-test('/usagemeter bench reports a failed limits phase without exposing the hub key', { options: { hubUrl: 'http://localhost:8317', hubKey: 'test-only-value' } }, async ($, on) => {
+test('/usagemeter bench shows account counts and warns when they change', { options: { hubUrl: 'http://localhost:8317', hubKey: 'test-only-value' } }, async ($, on) => {
   on('store.get', () => ({ value: undefined }))
+  on('command.register', () => ({ value: undefined }))
+  on('session.start', () => ({ cwd: '/work' }))
+  on('process.run', ($: unknown, e: any) => {
+    const report = {
+      version: 1,
+      appVersion: '0.2.0',
+      sha: 'abcdef012345',
+      dirty: false,
+      warmupMs: 3000,
+      reportFile: 'bench-2026-10-11T12-30-00-000Z.json',
+      phases: {
+        cachedScan: { medianMs: 12, p90Ms: 16 },
+        coldScan: { medianMs: 240, p90Ms: 240 },
+        limits: { medianMs: 3500, p90Ms: 4100 },
+      },
+      limitsAccounts: {
+        warmup: { ok: 1, failed: 1 },
+        rounds: [{ ok: 1, failed: 1 }],
+      },
+      limitsAccountsWarning: 'Limits accounts changed between rounds (1 ok, 1 failed; 2 ok, 0 failed): compare before/after only with the same account state.',
+    }
+    return { value: { exitCode: 0, stdout: JSON.stringify(report) + '\n', stderr: '' } }
+  })
+
+  await $.session.start({ surface: 'terminal', isInteractive: true, cwd: '/work' })
+  const result = await $.command.run({ command: 'usagemeter', args: 'bench' })
+
+  expect(result.text).toContain('Limits accounts (warm-up): 1 ok, 1 failed.')
+  expect(result.text).toContain('Warning: Limits accounts changed between rounds')
+  expect(result.text).not.toContain('test-only-value')
+})
+
+test('/usagemeter bench reports a failed limits phase without exposing the hub key', { options: { hubUrl: 'http://localhost:8317', hubKey: 'test-only-value' } }, async ($, on) => {  on('store.get', () => ({ value: undefined }))
   on('command.register', () => ({ value: undefined }))
   on('session.start', () => ({ cwd: '/work' }))
   on('process.run', () => ({ value: {
