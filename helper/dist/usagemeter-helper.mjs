@@ -15,8 +15,16 @@ var __export = (target, all) => {
 };
 
 // helper/src/main.ts
+import * as os4 from "node:os";
+import * as path7 from "node:path";
+import { fileURLToPath } from "node:url";
+
+// helper/src/bench.ts
+import { mkdtemp, mkdir as mkdir3, rename as rename2, rm, writeFile as writeFile3 } from "node:fs/promises";
+import { randomUUID } from "node:crypto";
 import * as os3 from "node:os";
 import * as path5 from "node:path";
+import { performance } from "node:perf_hooks";
 
 // helper/src/limits.ts
 import { spawn } from "node:child_process";
@@ -3103,13 +3111,130 @@ async function scan(options) {
   return { sources, ranges };
 }
 
+// helper/src/bench.ts
+var CACHED_SCAN_ROUNDS = 10, COLD_SCAN_ROUNDS = 1, LIMITS_ROUNDS = 10, LIMITS_INTERVAL_MS = 3000;
+function summarizeSamples(samples) {
+  if (samples.length === 0)
+    throw Error("A benchmark phase needs at least one sample.");
+  let sorted = [...samples].sort((left, right) => left - right), middle = Math.floor(sorted.length / 2), median = sorted.length % 2 === 0 ? (sorted[middle - 1] + sorted[middle]) / 2 : sorted[middle], p90 = sorted[Math.ceil(sorted.length * 0.9) - 1];
+  return { medianMs: roundMs(median), p90Ms: roundMs(p90) };
+}
+async function runBench(options, dependencies = {}) {
+  let hubUrl = options.env.USAGEMETER_HUB_URL?.trim(), hubKey = options.env.USAGEMETER_HUB_KEY?.trim();
+  if (!hubUrl || !hubKey)
+    throw Error("The bench requires a configured hub URL and management key.");
+  let loadRatesForBench = dependencies.loadRates ?? loadRates, scanForBench = dependencies.scan ?? scan, readLimitsForBench = dependencies.readLimits ?? readLimits, monotonicNow = dependencies.monotonicNow ?? (() => performance.now()), wallNow = dependencies.wallNow ?? (() => /* @__PURE__ */ new Date), sleep = dependencies.sleep ?? ((ms) => new Promise((resolve) => setTimeout(resolve, ms))), tempRoot = await mkdtemp(path5.join(options.tempDir ?? os3.tmpdir(), "usagemeter-bench-"));
+  try {
+    let ratesCacheDir = path5.join(tempRoot, "rates"), timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC", cachedCacheDir = path5.join(tempRoot, "cached-scan"), coldCacheDir = path5.join(tempRoot, "cold-scan"), scanOnce = async (cacheDir) => {
+      let nowMs = wallNow().getTime(), rates = await loadRatesForBench(ratesCacheDir, nowMs);
+      return scanForBench({ nowMs, timeZone, rates: rates.table, cacheDir, env: options.env });
+    };
+    await scanOnce(cachedCacheDir);
+    let cachedScan = await measure(CACHED_SCAN_ROUNDS, () => scanOnce(cachedCacheDir), monotonicNow, sleep), coldScan = await measure(COLD_SCAN_ROUNDS, () => scanOnce(coldCacheDir), monotonicNow, sleep), openCodeGoEnabled = options.env.USAGEMETER_OPENCODE_GO === "1", readLimitsSample = async (phase) => {
+      try {
+        let result = await readLimitsForBench({
+          nowMs: wallNow().getTime(),
+          hubUrl,
+          hubKey,
+          openCodeGo: openCodeGoEnabled,
+          hubAutostart: options.env.USAGEMETER_HUB_AUTOSTART === "1",
+          ...options.env.USAGEMETER_HUB_BIN?.trim() ? { hubBin: options.env.USAGEMETER_HUB_BIN.trim() } : {},
+          env: options.env
+        }), reason = limitsFailureReason(result, openCodeGoEnabled);
+        if (reason)
+          throw Error(reason);
+      } catch (error) {
+        let message = error instanceof Error && error.message ? error.message : "The limits request failed.";
+        throw Error(`${phase} failed: ${withoutHubKey(message, hubKey)}`);
+      }
+    }, warmupStartedAt = monotonicNow();
+    await readLimitsSample("Limits warm-up");
+    let warmupMs = roundMs(monotonicNow() - warmupStartedAt);
+    await sleep(LIMITS_INTERVAL_MS);
+    let limits = await measure(LIMITS_ROUNDS, () => readLimitsSample("Limits phase"), monotonicNow, sleep, LIMITS_INTERVAL_MS), report = {
+      version: options.version,
+      sha: options.sha,
+      dirty: options.dirty,
+      warmupMs,
+      generatedAt: wallNow().toISOString(),
+      rounds: {
+        cachedScan: CACHED_SCAN_ROUNDS,
+        coldScan: COLD_SCAN_ROUNDS,
+        limits: LIMITS_ROUNDS,
+        warmupScans: 1,
+        warmupLimits: 1
+      },
+      phases: { cachedScan, coldScan, limits }
+    }, fileName = `bench-${report.generatedAt.replace(/[:.]/g, "-")}-${randomUUID()}.json`;
+    return await mkdir3(options.reportDir, { recursive: !0 }), await writeReport(path5.join(options.reportDir, fileName), report), { report, reportDir: options.reportDir, fileName };
+  } finally {
+    await rm(tempRoot, { recursive: !0, force: !0 });
+  }
+}
+async function measure(count, run, now, sleep, intervalMs = 0) {
+  let samplesMs = [];
+  for (let index = 0;index < count; index += 1) {
+    let startedAt = now();
+    if (await run(), samplesMs.push(roundMs(now() - startedAt)), intervalMs > 0 && index < count - 1)
+      await sleep(intervalMs);
+  }
+  return { samplesMs, ...summarizeSamples(samplesMs) };
+}
+async function writeReport(file, report) {
+  let temporary = `${file}.tmp`;
+  try {
+    await writeFile3(temporary, JSON.stringify(report, null, 2) + `
+`, { flag: "wx" }), await rename2(temporary, file);
+  } catch (error) {
+    throw await rm(temporary, { force: !0 }), error;
+  }
+}
+function roundMs(value) {
+  return Math.round(value * 1000) / 1000;
+}
+function limitsFailureReason(result, openCodeGoEnabled) {
+  if (result.hub.status !== "ok")
+    return result.hub.message ?? `The hub returned status "${result.hub.status}".`;
+  let hubAccounts = result.accounts.filter((account) => account.provider !== "opencode-go");
+  if (hubAccounts.length === 0)
+    return "The hub returned no account limit data.";
+  if (hubAccounts.some((account) => account.error || account.windows.length === 0))
+    return "The hub returned incomplete account limit data.";
+  if (openCodeGoEnabled) {
+    if (result.openCodeGo.status !== "ok")
+      return result.openCodeGo.message ?? `OpenCode Go returned status "${result.openCodeGo.status}".`;
+    if (!result.accounts.some((account) => account.provider === "opencode-go" && account.windows.length > 0))
+      return "OpenCode Go returned no limit data.";
+  }
+  return;
+}
+function withoutHubKey(message, hubKey) {
+  return hubKey ? message.replaceAll(hubKey, "[redacted]") : message;
+}
+
+// helper/src/version.ts
+import { execFileSync } from "node:child_process";
+import { readFile as readFile5 } from "node:fs/promises";
+import * as path6 from "node:path";
+async function readVersionMetadata(pluginRoot) {
+  let manifestText = await readFile5(path6.join(pluginRoot, ".claude-plugin", "plugin.json"), "utf8"), manifest = JSON.parse(manifestText);
+  if (typeof manifest.version !== "string" || manifest.version.length === 0)
+    throw Error("The loaded plugin manifest has no version.");
+  try {
+    let git = (args) => execFileSync("git", ["-C", pluginRoot, ...args], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim(), sha = git(["rev-parse", "--short=12", "HEAD"]), dirty = git(["status", "--porcelain", "--untracked-files=all"]).length > 0;
+    return { version: manifest.version, sha, dirty };
+  } catch {
+    return { version: manifest.version, sha: "unknown", dirty: !1 };
+  }
+}
+
 // helper/src/main.ts
 var OUTPUT_VERSION = 1;
 function cacheDir(env) {
   if (env.USAGEMETER_CACHE_DIR?.trim())
     return env.USAGEMETER_CACHE_DIR.trim();
   let xdg = env.XDG_CACHE_HOME?.trim();
-  return path5.join(xdg && path5.isAbsolute(xdg) ? xdg : path5.join(os3.homedir(), ".cache"), "usagemeter");
+  return path7.join(xdg && path7.isAbsolute(xdg) ? xdg : path7.join(os4.homedir(), ".cache"), "usagemeter");
 }
 function flag(args, name) {
   let index = args.indexOf(name);
@@ -3140,7 +3265,35 @@ async function main(argv) {
     });
     return write({ version: OUTPUT_VERSION, checkedAt: (/* @__PURE__ */ new Date()).toISOString(), ...result }), 0;
   }
-  return write({ version: OUTPUT_VERSION, error: `Unknown command '${command ?? ""}'. Use 'scan' or 'limits'.` }), 2;
+  if (command === "bench") {
+    let metadata = await loadedVersion(), result = await runBench({
+      reportDir: cacheDir(env),
+      env,
+      version: metadata.version,
+      sha: metadata.sha,
+      dirty: metadata.dirty
+    });
+    return write({
+      version: OUTPUT_VERSION,
+      appVersion: result.report.version,
+      sha: result.report.sha,
+      dirty: result.report.dirty,
+      warmupMs: result.report.warmupMs,
+      generatedAt: result.report.generatedAt,
+      rounds: result.report.rounds,
+      phases: result.report.phases,
+      reportFile: result.fileName
+    }), 0;
+  }
+  if (command === "version") {
+    let metadata = await loadedVersion();
+    return write({ version: OUTPUT_VERSION, appVersion: metadata.version, sha: metadata.sha, dirty: metadata.dirty }), 0;
+  }
+  return write({ version: OUTPUT_VERSION, error: `Unknown command '${command ?? ""}'. Use 'scan', 'limits', 'bench' or 'version'.` }), 2;
+}
+async function loadedVersion() {
+  let pluginRoot = path7.resolve(path7.dirname(fileURLToPath(import.meta.url)), "../..");
+  return readVersionMetadata(pluginRoot);
 }
 function write(document) {
   process.stdout.write(JSON.stringify(document) + `

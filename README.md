@@ -115,6 +115,21 @@ claude --plugin-dir ./usagemeter
 
 `/usagemeter refresh` opens the pane and rescans at once.
 
+`/usagemeter bench` measures 10 scans after one untimed cache warm-up, one scan
+with a separate empty cache, and 10 hub limit updates spaced three seconds
+apart. The first limits update is a warm-up. Its duration appears as
+`warmupMs`, outside the median and p90 for the 10 measured updates. The helper
+saves sample times and metadata in `bench-<UTC timestamp>-<run id>.json` under
+the usagemeter cache directory, which defaults to `~/.cache/usagemeter`. The
+report contains no account labels, quota values, or hub key. If the hub returns
+no or incomplete account limit data, or a configured limits source fails, the
+bench exits with an error and does not save a report. The bench needs a
+configured hub URL and management key, and may take several minutes.
+
+`/usagemeter version` prints the loaded plugin version and the Git SHA of its
+checkout, or `unknown` when Git metadata is unavailable. It adds `(dirty)` when
+the checkout has uncommitted changes.
+
 The keys work while the pane has keyboard focus. It takes focus when you open
 it from an empty prompt; press Ctrl+X then Tab to focus it later. In a
 terminal narrower than about 144 columns the pane opens above the prompt;

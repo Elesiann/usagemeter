@@ -13,6 +13,7 @@ const STALE_MS = 5 * 60 * 1000
 /** A cold 90-day scan reads every transcript once; later scans reuse the helper's cache. */
 const SCAN_TIMEOUT_MS = 10 * 60 * 1000
 const LIMITS_TIMEOUT_MS = 60 * 1000
+const BENCH_TIMEOUT_MS = 10 * 60 * 1000
 
 let config = {}
 let tab = 'cost'
@@ -154,7 +155,7 @@ export function register(on, options) {
     await $.command.register({
       name: 'usagemeter',
       description: 'Cost, tokens and plan limits across your coding agents',
-      argumentHint: '[refresh]',
+      argumentHint: '[refresh|bench|version]',
       immediate: true,
     })
     return next(e)
@@ -169,8 +170,38 @@ export function register(on, options) {
   })
 
   on('command.run', { command: 'usagemeter' }, async ($, e) => {
+    const args = e.args.trim()
+    if (args === 'version') {
+      const result = await $.process.run(['node', '--no-warnings', $.plugin.root + '/helper/dist/usagemeter-helper.mjs', 'version'])
+      const doc = parseOutput(result.stdout)
+      if (result.exitCode !== 0 || !doc?.appVersion || !doc.sha) return { text: failure(result, doc) }
+      return { text: 'usagemeter ' + doc.appVersion + ' · sha ' + doc.sha + (doc.dirty ? ' (dirty)' : '') }
+    }
+    if (args === 'bench') {
+      const result = await $.process.run(['node', '--no-warnings', $.plugin.root + '/helper/dist/usagemeter-helper.mjs', 'bench'], {
+        timeoutMs: BENCH_TIMEOUT_MS,
+        env: {
+          USAGEMETER_HUB_URL: String(config.hubUrl ?? ''),
+          USAGEMETER_HUB_KEY: String(config.hubKey ?? ''),
+          USAGEMETER_OPENCODE_GO: config.openCodeGo ? '1' : '0',
+          USAGEMETER_HUB_AUTOSTART: config.hubAutostart === false ? '0' : '1',
+        },
+      })
+      const doc = parseOutput(result.stdout)
+      if (result.exitCode !== 0 || !doc?.phases || !doc.reportFile) return { text: failure(result, doc) }
+      const { cachedScan, coldScan, limits: limitsPhase } = doc.phases
+      return {
+        text: [
+          'Bench complete. Saved ' + doc.reportFile + '.',
+          'Cached scan median: ' + cachedScan.medianMs + ' ms; p90: ' + cachedScan.p90Ms + ' ms.',
+          'Cold scan median: ' + coldScan.medianMs + ' ms; p90: ' + coldScan.p90Ms + ' ms.',
+          'Limits warm-up: ' + doc.warmupMs + ' ms.',
+          'Limits median: ' + limitsPhase.medianMs + ' ms; p90: ' + limitsPhase.p90Ms + ' ms.',
+        ].join('\n'),
+      }
+    }
     await $.ui.open({ id: PANE, title: 'Usage meter', focus: true, closeOnEscape: true, columns: 150 })
-    refresh($, e.args.trim() === 'refresh')
+    refresh($, args === 'refresh')
     return {}
   })
 
