@@ -122,9 +122,9 @@ apart. The first limits update is a warm-up. Its duration appears as
 saves sample times and metadata in `bench-<UTC timestamp>-<run id>.json` under
 the usagemeter cache directory, which defaults to `~/.cache/usagemeter`. The
 report contains no account labels, quota values, or hub key. If the hub returns
-no account limit data or a configured limits source fails, the bench exits with
-an error and does not save a report. The bench needs a configured hub URL and
-management key, and may take several minutes.
+no or incomplete account limit data, or a configured limits source fails, the
+bench exits with an error and does not save a report. The bench needs a
+configured hub URL and management key, and may take several minutes.
 
 `/usagemeter version` prints the loaded plugin version and the Git SHA of its
 checkout, or `unknown` when Git metadata is unavailable. It adds `(dirty)` when

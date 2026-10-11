@@ -231,6 +231,43 @@ test("bench rejects a hub response without limit data", async () => {
   }
 });
 
+test("bench rejects partial hub account limits", async () => {
+  const home = await mkdtemp(path.join(os.tmpdir(), "usagemeter-bench-partial-hub-test-"));
+  const reportDir = path.join(home, "reports");
+  try {
+    await assert.rejects(
+      runBench({
+        reportDir,
+        tempDir: home,
+        env: { USAGEMETER_HUB_URL: "http://localhost:8317", USAGEMETER_HUB_KEY: "k" },
+        version: "0.2.0",
+        sha: "abcdef012345",
+        dirty: false,
+      }, {
+        loadRates: async () => ({ table: new Map(), status: "unavailable", fetchedAtMs: null }),
+        scan: async () => ({}),
+        readLimits: async () => ({
+          accounts: [
+            { provider: "codex", label: "sample-account", windows: [
+              { id: "primary", label: "Session", kind: "session", usedPercent: 73 },
+            ] },
+            { provider: "claude", label: "sample-account", windows: [], error: "The hub answered HTTP 401." },
+          ],
+          hub: { status: "ok" },
+          openCodeGo: { status: "off" },
+        }),
+        monotonicNow: () => 0,
+        wallNow: () => new Date("2026-10-11T12:30:00.000Z"),
+        sleep: async () => {},
+      }),
+      /Limits warm-up failed: The hub returned incomplete account limit data\./,
+    );
+    await assert.rejects(access(reportDir));
+  } finally {
+    await rm(home, { recursive: true, force: true });
+  }
+});
+
 test("bench rejects a failed configured OpenCode Go limits source", async () => {
   const home = await mkdtemp(path.join(os.tmpdir(), "usagemeter-bench-opencode-error-test-"));
   const reportDir = path.join(home, "reports");

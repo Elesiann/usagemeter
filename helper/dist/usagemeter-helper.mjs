@@ -3195,8 +3195,11 @@ function roundMs(value) {
 function limitsFailureReason(result, openCodeGoEnabled) {
   if (result.hub.status !== "ok")
     return result.hub.message ?? `The hub returned status "${result.hub.status}".`;
-  if (!result.accounts.filter((account) => account.provider !== "opencode-go").some((account) => account.windows.length > 0))
+  let hubAccounts = result.accounts.filter((account) => account.provider !== "opencode-go");
+  if (hubAccounts.length === 0)
     return "The hub returned no account limit data.";
+  if (hubAccounts.some((account) => account.error || account.windows.length === 0))
+    return "The hub returned incomplete account limit data.";
   if (openCodeGoEnabled) {
     if (result.openCodeGo.status !== "ok")
       return result.openCodeGo.message ?? `OpenCode Go returned status "${result.openCodeGo.status}".`;

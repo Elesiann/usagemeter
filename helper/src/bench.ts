@@ -194,8 +194,11 @@ function limitsFailureReason(result: LimitsOutput, openCodeGoEnabled: boolean): 
   }
 
   const hubAccounts = result.accounts.filter((account) => account.provider !== "opencode-go");
-  if (!hubAccounts.some((account) => account.windows.length > 0)) {
+  if (hubAccounts.length === 0) {
     return "The hub returned no account limit data.";
+  }
+  if (hubAccounts.some((account) => account.error || account.windows.length === 0)) {
+    return "The hub returned incomplete account limit data.";
   }
 
   if (openCodeGoEnabled) {
