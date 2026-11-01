@@ -20,7 +20,7 @@
   },
   "devDependencies": {
     "@types/node": "^26.6.4",
-    "effect": "4.0.1",
+    "effect": "4.1.0",
     "stream-chain": "^4.2.5",
     "stream-json": "3.7.0",
     "typescript": "^7.0.2"
